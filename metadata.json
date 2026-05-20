@@ -1,0 +1,8 @@
+{
+  "name": "OrçaPrático",
+  "description": "Aplicativo mobile-first para profissionais de obra gerarem orçamentos rápidos com cálculos de área e exportação em PDF.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
