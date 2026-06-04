@@ -44,7 +44,7 @@ export default function Dashboard({ quotes, onNewQuote, onViewQuote }: Dashboard
         </div>
       </motion.button>
 
-      {/* Stats Bento */}
+      {/* Bento Stats */}
       <div className="grid grid-cols-2 gap-6">
         <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-xl shadow-slate-100 flex flex-col gap-2">
           <div className="flex items-center gap-2 text-slate-400 text-[10px] font-bold uppercase tracking-widest">

@@ -1,8 +1,3 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -12,16 +7,21 @@ import {
   Calculator as CalcIcon, 
   FileText as SummaryIcon,
   Construction,
-  Bell
+  User as UserIcon,
+  LogOut,
+  Loader2
 } from 'lucide-react';
 import { Quote, QuoteStatus, QuoteItem, CustomerInfo } from './types';
+import { supabase } from './lib/supabase';
 import Dashboard from './components/Dashboard';
 import CustomerForm from './components/CustomerForm';
 import Calculator from './components/Calculator';
 import Summary from './components/Summary';
+import Login from './components/Login';
+import ProfileSettings from './components/ProfileSettings';
 import { cn } from './lib/utils';
 
-type Screen = 'dashboard' | 'customer' | 'calculator' | 'summary';
+type Screen = 'dashboard' | 'customer' | 'calculator' | 'summary' | 'profile';
 
 const EMPTY_CUSTOMER: CustomerInfo = {
   name: '',
@@ -35,23 +35,151 @@ export default function App() {
   const [currentScreen, setCurrentScreen] = useState<Screen>('dashboard');
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [currentQuote, setCurrentQuote] = useState<Quote | null>(null);
+  
+  // Auth state
+  const [session, setSession] = useState<any>(null);
+  const [user, setUser] = useState<any>(null);
+  const [profile, setProfile] = useState<any>(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
-  // Load quotes from localStorage
+  // Monitor auth state changes
   useEffect(() => {
-    const saved = localStorage.getItem('orcapratico_quotes');
-    if (saved) {
-      try {
-        setQuotes(JSON.parse(saved));
-      } catch (e) {
-        console.error('Error loading quotes', e);
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setUser(session?.user ?? null);
+      setAuthLoading(false);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      setUser(session?.user ?? null);
+      setAuthLoading(false);
+      if (!session) {
+        setQuotes([]);
+        setProfile(null);
       }
-    }
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
-  // Save quotes to localStorage
+  // Fetch profile and quotes from Supabase
+  const loadData = async (userId: string) => {
+    try {
+      // 1. Fetch Profile
+      const { data: profileData, error: profileErr } = await supabase
+        .from('perfis_profissionais')
+        .select('*')
+        .eq('id', userId)
+        .single();
+      
+      let currentProfile = profileData;
+      if (profileData) {
+        setProfile(profileData);
+      }
+
+      // 2. Fetch Quotes
+      const { data: quotesData, error: quotesErr } = await supabase
+        .from('orcamentos')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
+
+      if (quotesErr) throw quotesErr;
+
+      if (quotesData) {
+        const mappedQuotes: Quote[] = quotesData.map(q => ({
+          id: q.id,
+          numeroSequencial: q.numero_sequencial,
+          date: q.data,
+          customer: q.cliente as CustomerInfo,
+          items: q.itens as QuoteItem[],
+          discount: Number(q.desconto) || 0,
+          adjustment: Number(q.ajuste) || 0,
+          notes: q.observacoes || '',
+          executionTerm: q.execution_term || '',
+          paymentTerms: q.payment_terms || '',
+          professionalName: currentProfile?.nome || 'Profissional',
+          professionalTaxId: currentProfile?.documento || '',
+          professionalPhone: currentProfile?.telefone || '',
+          professionalLogoUrl: currentProfile?.logo_url || undefined,
+          status: q.status as QuoteStatus,
+          totalAmount: Number(q.total_amount) || 0,
+        }));
+        setQuotes(mappedQuotes);
+      }
+    } catch (e) {
+      console.error('Error loading data:', e);
+    }
+  };
+
   useEffect(() => {
-    localStorage.setItem('orcapratico_quotes', JSON.stringify(quotes));
-  }, [quotes]);
+    if (user) {
+      loadData(user.id);
+    }
+  }, [user, currentScreen]); // reload data when user logs in or when screen changes to get fresh profile info
+
+  const saveQuoteToSupabase = async (quote: Quote) => {
+    if (!user) return;
+    try {
+      const { data, error } = await supabase
+        .from('orcamentos')
+        .upsert({
+          id: quote.id,
+          user_id: user.id,
+          data: quote.date,
+          cliente: quote.customer,
+          itens: quote.items,
+          desconto: quote.discount,
+          ajuste: quote.adjustment,
+          observacoes: quote.notes,
+          status: quote.status,
+          execution_term: quote.executionTerm,
+          payment_terms: quote.paymentTerms,
+          total_amount: quote.totalAmount
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      if (data) {
+        const mapped: Quote = {
+          id: data.id,
+          numeroSequencial: data.numero_sequencial,
+          date: data.data,
+          customer: data.cliente as CustomerInfo,
+          items: data.itens as QuoteItem[],
+          discount: Number(data.desconto) || 0,
+          adjustment: Number(data.ajuste) || 0,
+          notes: data.observacoes || '',
+          executionTerm: data.execution_term || '',
+          paymentTerms: data.payment_terms || '',
+          professionalName: profile?.nome || 'Profissional',
+          professionalTaxId: profile?.documento || '',
+          professionalPhone: profile?.telefone || '',
+          professionalLogoUrl: profile?.logo_url || undefined,
+          status: data.status as QuoteStatus,
+          totalAmount: Number(data.total_amount) || 0
+        };
+
+        setQuotes(prev => {
+          const exists = prev.find(q => q.id === mapped.id);
+          if (exists) {
+            return prev.map(q => q.id === mapped.id ? mapped : q);
+          }
+          return [mapped, ...prev];
+        });
+
+        // Sync local currentQuote if it is the one being saved
+        if (currentQuote && currentQuote.id === mapped.id) {
+          setCurrentQuote(mapped);
+        }
+      }
+    } catch (err) {
+      console.error('Error saving quote to Supabase:', err);
+    }
+  };
 
   const startNewQuote = () => {
     const newQuote: Quote = {
@@ -61,46 +189,56 @@ export default function App() {
       items: [],
       discount: 0,
       adjustment: 0,
-      notes: '',
+      notes: profile?.termos_padrao || '',
       executionTerm: 'A combinar',
       paymentTerms: '50% de sinal + 50% na entrega.',
-      professionalName: 'OrçaPrático Serviços',
-      professionalTaxId: '12.345.678/0001-90',
-      professionalPhone: '(11) 95492-5944',
+      professionalName: profile?.nome || 'OrçaPrático Serviços',
+      professionalTaxId: profile?.documento || '',
+      professionalPhone: profile?.telefone || '',
+      professionalLogoUrl: profile?.logo_url || undefined,
       status: QuoteStatus.DRAFT,
       totalAmount: 0,
     };
     setCurrentQuote(newQuote);
+    saveQuoteToSupabase(newQuote);
     setCurrentScreen('customer');
   };
 
   const handleUpdateQuote = (updated: Quote) => {
     setCurrentQuote(updated);
+    saveQuoteToSupabase(updated);
   };
 
-  const finalizeQuote = () => {
+  const finalizeQuote = async () => {
     if (!currentQuote) return;
     
+    const totalAmount = currentQuote.items.reduce((acc, i) => acc + i.total, 0) - currentQuote.discount + currentQuote.adjustment;
     const finalized = { 
       ...currentQuote, 
       status: QuoteStatus.SENT,
-      totalAmount: currentQuote.items.reduce((acc, i) => acc + i.total, 0) - currentQuote.discount + currentQuote.adjustment
+      totalAmount
     };
     
-    setQuotes(prev => {
-      const exists = prev.find(q => q.id === finalized.id);
-      if (exists) {
-        return prev.map(q => q.id === finalized.id ? finalized : q);
-      }
-      return [finalized, ...prev];
-    });
-    
+    await saveQuoteToSupabase(finalized);
     setCurrentScreen('dashboard');
     setCurrentQuote(null);
   };
 
-  const deleteQuote = (id: string) => {
+  const deleteQuote = async (id: string) => {
     setQuotes(prev => prev.filter(q => q.id !== id));
+    try {
+      const { error } = await supabase
+        .from('orcamentos')
+        .delete()
+        .eq('id', id);
+      if (error) throw error;
+    } catch (err) {
+      console.error('Error deleting quote:', err);
+    }
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
   };
 
   const renderScreen = () => {
@@ -118,18 +256,58 @@ export default function App() {
           <CustomerForm 
             data={currentQuote.customer}
             onChange={(customer) => setCurrentQuote({ ...currentQuote, customer })}
-            onNext={() => setCurrentScreen('calculator')}
-            onBack={() => setCurrentScreen('dashboard')}
+            onNext={() => {
+              saveQuoteToSupabase(currentQuote);
+              setCurrentScreen('calculator');
+            }}
+            onBack={() => {
+              saveQuoteToSupabase(currentQuote);
+              setCurrentScreen('dashboard');
+            }}
           />
         );
       case 'calculator':
         return currentQuote && (
           <Calculator 
             items={currentQuote.items}
-            onAddItem={(item) => setCurrentQuote({ ...currentQuote, items: [...currentQuote.items, item] })}
-            onRemoveItem={(id) => setCurrentQuote({ ...currentQuote, items: currentQuote.items.filter(i => i.id !== id) })}
-            onNext={() => setCurrentScreen('summary')}
-            onBack={() => setCurrentScreen('customer')}
+            onAddItem={(item) => {
+              const updatedItems = [...currentQuote.items, item];
+              const updatedQuote = {
+                ...currentQuote,
+                items: updatedItems,
+                totalAmount: updatedItems.reduce((acc, i) => acc + i.total, 0) - currentQuote.discount + currentQuote.adjustment
+              };
+              setCurrentQuote(updatedQuote);
+              saveQuoteToSupabase(updatedQuote);
+            }}
+            onRemoveItem={(id) => {
+              const updatedItems = currentQuote.items.filter(i => i.id !== id);
+              const updatedQuote = {
+                ...currentQuote,
+                items: updatedItems,
+                totalAmount: updatedItems.reduce((acc, i) => acc + i.total, 0) - currentQuote.discount + currentQuote.adjustment
+              };
+              setCurrentQuote(updatedQuote);
+              saveQuoteToSupabase(updatedQuote);
+            }}
+            onUpdateItem={(updatedItem) => {
+              const updatedItems = currentQuote.items.map(i => i.id === updatedItem.id ? updatedItem : i);
+              const updatedQuote = {
+                ...currentQuote,
+                items: updatedItems,
+                totalAmount: updatedItems.reduce((acc, i) => acc + i.total, 0) - currentQuote.discount + currentQuote.adjustment
+              };
+              setCurrentQuote(updatedQuote);
+              saveQuoteToSupabase(updatedQuote);
+            }}
+            onNext={() => {
+              saveQuoteToSupabase(currentQuote);
+              setCurrentScreen('summary');
+            }}
+            onBack={() => {
+              saveQuoteToSupabase(currentQuote);
+              setCurrentScreen('customer');
+            }}
           />
         );
       case 'summary':
@@ -138,26 +316,81 @@ export default function App() {
             quote={currentQuote}
             onUpdateQuote={handleUpdateQuote}
             onFinalize={finalizeQuote}
-            onBack={() => setCurrentScreen('calculator')}
-            onRemoveItem={(id) => setCurrentQuote({ ...currentQuote, items: currentQuote.items.filter(i => i.id !== id) })}
+            onBack={() => {
+              saveQuoteToSupabase(currentQuote);
+              setCurrentScreen('calculator');
+            }}
+            onRemoveItem={(id) => {
+              const updatedItems = currentQuote.items.filter(i => i.id !== id);
+              const updatedQuote = {
+                ...currentQuote,
+                items: updatedItems,
+                totalAmount: updatedItems.reduce((acc, i) => acc + i.total, 0) - currentQuote.discount + currentQuote.adjustment
+              };
+              setCurrentQuote(updatedQuote);
+              saveQuoteToSupabase(updatedQuote);
+            }}
+          />
+        );
+      case 'profile':
+        return (
+          <ProfileSettings 
+            userId={user.id} 
+            onBack={() => setCurrentScreen('dashboard')} 
+            onLogout={handleLogout}
           />
         );
     }
   };
 
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-surface flex flex-col justify-center items-center gap-3">
+        <Loader2 className="animate-spin text-primary" size={40} />
+        <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Carregando OrçaPrático...</p>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Login />;
+  }
+
   return (
     <div className="min-h-screen bg-surface flex flex-col font-sans">
       {/* Top Bar */}
       <header className="fixed top-0 w-full z-50 bg-white shadow-sm border-b border-surface-container h-[64px] flex justify-between items-center px-6">
-        <div className="flex items-center gap-3">
+        <div 
+          className="flex items-center gap-3 cursor-pointer select-none touch-target" 
+          onClick={() => {
+            setCurrentQuote(null);
+            setCurrentScreen('dashboard');
+          }}
+        >
           <div className="w-10 h-10 bg-primary rounded-xl flex items-center justify-center">
             <Construction className="text-white" size={24} />
           </div>
           <h1 className="text-xl font-bold text-slate-800 tracking-tight">OrçaPrático</h1>
         </div>
-        <button className="p-2 rounded-full hover:bg-slate-50 text-slate-400 transition-colors">
-          <Bell size={24} />
-        </button>
+        <div className="flex items-center gap-2">
+          <button 
+            onClick={() => setCurrentScreen('profile')}
+            className={cn(
+              "p-2 rounded-full hover:bg-slate-50 text-slate-400 hover:text-primary transition-colors touch-target",
+              currentScreen === 'profile' && "text-primary bg-blue-50"
+            )}
+            title="Configurações do Perfil"
+          >
+            <UserIcon size={22} />
+          </button>
+          <button 
+            onClick={handleLogout}
+            className="p-2 rounded-full hover:bg-red-50 text-slate-400 hover:text-red-500 transition-colors touch-target"
+            title="Sair"
+          >
+            <LogOut size={22} />
+          </button>
+        </div>
       </header>
 
       {/* Main Content */}
@@ -182,7 +415,10 @@ export default function App() {
             icon={<LayoutDashboard size={22} />} 
             label="Início" 
             active={currentScreen === 'dashboard'} 
-            onClick={() => setCurrentScreen('dashboard')} 
+            onClick={() => {
+              setCurrentQuote(null);
+              setCurrentScreen('dashboard');
+            }} 
           />
           <NavBtn 
             icon={<Users size={22} />} 
@@ -251,17 +487,3 @@ function NavBtn({ icon, label, active, onClick, disabled }: NavBtnProps) {
     </button>
   );
 }
-
-// Replacement for Lucide Icon not found in previous context
-function DescriptionIcon({ size }: { size: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-      <polyline points="14 2 14 8 20 8" />
-      <line x1="16" y1="13" x2="8" y2="13" />
-      <line x1="16" y1="17" x2="8" y2="17" />
-      <polyline points="10 9 9 9 8 9" />
-    </svg>
-  );
-}
-

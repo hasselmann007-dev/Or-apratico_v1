@@ -4,14 +4,25 @@ export enum QuoteStatus {
   APPROVED = 'Aprovado',
 }
 
+export type PricingType = 'm2' | 'fixed';
+
 export interface QuoteItem {
   id: string;
+  type?: PricingType;
   category: string;
   description: string;
-  length: number;
-  widthOrHeight: number;
-  area: number;
-  unitPrice: number;
+  
+  // m2 specific
+  length?: number;
+  widthOrHeight?: number;
+  area?: number;
+  unitPrice?: number;
+  
+  // fixed specific
+  details?: string;
+  fixedTerm?: string;
+  
+  // common
   total: number;
 }
 
@@ -25,6 +36,7 @@ export interface CustomerInfo {
 
 export interface Quote {
   id: string;
+  numeroSequencial?: string;
   date: string;
   customer: CustomerInfo;
   items: QuoteItem[];
@@ -36,6 +48,7 @@ export interface Quote {
   professionalName: string;
   professionalTaxId: string;
   professionalPhone: string;
+  professionalLogoUrl?: string;
   status: QuoteStatus;
   totalAmount: number;
 }
