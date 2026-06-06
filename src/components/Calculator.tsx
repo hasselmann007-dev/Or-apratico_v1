@@ -387,7 +387,7 @@ interface EditableItemProps {
   onRemoveItem: (id: string) => void;
 }
 
-function EditableItem({ item, onUpdateItem, onRemoveItem }: EditableItemProps) {
+function EditableItem({ item, onUpdateItem, onRemoveItem }: EditableItemProps & { key?: string }) {
   const [isEditing, setIsEditing] = useState(false);
   const [localDescription, setLocalDescription] = useState(item.description);
   
