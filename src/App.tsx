@@ -9,7 +9,8 @@ import {
   Construction,
   User as UserIcon,
   LogOut,
-  Loader2
+  Loader2,
+  CheckCircle2
 } from 'lucide-react';
 import { Quote, QuoteStatus, QuoteItem, CustomerInfo } from './types';
 import { supabase } from './lib/supabase';
@@ -19,9 +20,10 @@ import Calculator from './components/Calculator';
 import Summary from './components/Summary';
 import Login from './components/Login';
 import ProfileSettings from './components/ProfileSettings';
+import ActionHub from './components/ActionHub';
 import { cn } from './lib/utils';
 
-type Screen = 'dashboard' | 'customer' | 'calculator' | 'summary' | 'profile';
+type Screen = 'dashboard' | 'customer' | 'calculator' | 'summary' | 'profile' | 'hub';
 
 const EMPTY_CUSTOMER: CustomerInfo = {
   name: '',
@@ -41,6 +43,15 @@ export default function App() {
   const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
+
+  // Toast notifications
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const showToast = (message: string) => {
+    setToastMessage(message);
+    setTimeout(() => {
+      setToastMessage(null);
+    }, 3000);
+  };
 
   // Monitor auth state changes
   useEffect(() => {
@@ -105,6 +116,9 @@ export default function App() {
           professionalLogoUrl: currentProfile?.logo_url || undefined,
           status: q.status as QuoteStatus,
           totalAmount: Number(q.total_amount) || 0,
+          foiPago: q.foi_pago,
+          formaPagamento: q.forma_pagamento,
+          dataPagamento: q.data_pagamento
         }));
         setQuotes(mappedQuotes);
       }
@@ -136,7 +150,10 @@ export default function App() {
           status: quote.status,
           execution_term: quote.executionTerm,
           payment_terms: quote.paymentTerms,
-          total_amount: quote.totalAmount
+          total_amount: quote.totalAmount,
+          foi_pago: quote.foiPago,
+          forma_pagamento: quote.formaPagamento,
+          data_pagamento: quote.dataPagamento
         })
         .select()
         .single();
@@ -160,7 +177,10 @@ export default function App() {
           professionalPhone: profile?.telefone || '',
           professionalLogoUrl: profile?.logo_url || undefined,
           status: data.status as QuoteStatus,
-          totalAmount: Number(data.total_amount) || 0
+          totalAmount: Number(data.total_amount) || 0,
+          foiPago: data.foi_pago,
+          formaPagamento: data.forma_pagamento,
+          dataPagamento: data.data_pagamento
         };
 
         setQuotes(prev => {
@@ -248,7 +268,9 @@ export default function App() {
           <Dashboard 
             quotes={quotes} 
             onNewQuote={startNewQuote} 
-            onViewQuote={(q) => { setCurrentQuote(q); setCurrentScreen('summary'); }} 
+            onViewQuote={(q) => { setCurrentQuote(q); setCurrentScreen('hub'); }} 
+            onDeleteQuote={deleteQuote}
+            showToast={showToast}
           />
         );
       case 'customer':
@@ -338,6 +360,23 @@ export default function App() {
             userId={user.id} 
             onBack={() => setCurrentScreen('dashboard')} 
             onLogout={handleLogout}
+          />
+        );
+      case 'hub':
+        return currentQuote && (
+          <ActionHub
+            quote={currentQuote}
+            onUpdateQuote={async (updated) => {
+              await saveQuoteToSupabase(updated);
+            }}
+            onEdit={() => {
+              setCurrentScreen('customer');
+            }}
+            onBack={() => {
+              setCurrentQuote(null);
+              setCurrentScreen('dashboard');
+            }}
+            showToast={showToast}
           />
         );
     }
@@ -443,6 +482,21 @@ export default function App() {
           />
         </div>
       </nav>
+
+      {/* Toast Notification overlay */}
+      <AnimatePresence>
+        {toastMessage && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.95 }}
+            className="fixed bottom-24 md:bottom-8 left-1/2 -translate-x-1/2 z-[9999] bg-slate-900 text-white px-6 py-3.5 rounded-2xl shadow-2xl flex items-center gap-2 border border-slate-800 text-xs font-bold uppercase tracking-wider whitespace-nowrap"
+          >
+            <CheckCircle2 size={16} className="text-emerald-500 animate-pulse" />
+            {toastMessage}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

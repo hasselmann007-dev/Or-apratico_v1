@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   PlusCircle, 
@@ -10,7 +10,10 @@ import {
   ChevronRight, 
   CheckCircle2, 
   Clock,
-  LayoutDashboard
+  LayoutDashboard,
+  Trash2,
+  Loader2,
+  X
 } from 'lucide-react';
 import { Quote, QuoteStatus } from '../types';
 import { cn } from '../lib/utils';
@@ -19,11 +22,36 @@ interface DashboardProps {
   quotes: Quote[];
   onNewQuote: () => void;
   onViewQuote: (quote: Quote) => void;
+  onDeleteQuote: (id: string) => Promise<void>;
+  showToast: (message: string) => void;
 }
 
-export default function Dashboard({ quotes, onNewQuote, onViewQuote }: DashboardProps) {
+export default function Dashboard({ quotes, onNewQuote, onViewQuote, onDeleteQuote, showToast }: DashboardProps) {
+  const [quoteToDelete, setQuoteToDelete] = useState<Quote | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
   const approvedCount = quotes.filter(q => q.status === QuoteStatus.APPROVED).length;
   const pendingCount = quotes.filter(q => q.status !== QuoteStatus.APPROVED).length;
+
+  const handleConfirmDelete = (e: React.MouseEvent, quote: Quote) => {
+    e.stopPropagation();
+    setQuoteToDelete(quote);
+  };
+
+  const executeDelete = async () => {
+    if (!quoteToDelete) return;
+    setIsDeleting(true);
+    try {
+      await onDeleteQuote(quoteToDelete.id);
+      showToast("Orçamento excluído com sucesso");
+      setQuoteToDelete(null);
+    } catch (err) {
+      console.error(err);
+      alert("Erro ao excluir o orçamento.");
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-8 p-6 pb-24 max-w-3xl mx-auto w-full font-sans">
@@ -44,7 +72,7 @@ export default function Dashboard({ quotes, onNewQuote, onViewQuote }: Dashboard
         </div>
       </motion.button>
 
-      {/* Bento Stats */}
+      {/* Stats Bento */}
       <div className="grid grid-cols-2 gap-6">
         <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-xl shadow-slate-100 flex flex-col gap-2">
           <div className="flex items-center gap-2 text-slate-400 text-[10px] font-bold uppercase tracking-widest">
@@ -90,14 +118,23 @@ export default function Dashboard({ quotes, onNewQuote, onViewQuote }: Dashboard
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{quote.date}</span>
                     </div>
                   </div>
-                  <span className={cn(
-                    "px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest",
-                    quote.status === QuoteStatus.APPROVED ? "bg-emerald-50 text-emerald-600" :
-                    quote.status === QuoteStatus.SENT ? "bg-blue-50 text-blue-600" :
-                    "bg-slate-50 text-slate-500"
-                  )}>
-                    {quote.status}
-                  </span>
+                  <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
+                    <span className={cn(
+                      "px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest",
+                      quote.status === QuoteStatus.APPROVED ? "bg-emerald-50 text-emerald-600" :
+                      quote.status === QuoteStatus.SENT ? "bg-blue-50 text-blue-600" :
+                      "bg-slate-50 text-slate-500"
+                    )}>
+                      {quote.status}
+                    </span>
+                    <button
+                      onClick={(e) => handleConfirmDelete(e, quote)}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors duration-200"
+                      aria-label="Excluir orçamento"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
                 </div>
                 <div className="pt-4 border-t border-slate-50 flex justify-between items-end">
                   <div className="flex flex-col">
@@ -116,6 +153,59 @@ export default function Dashboard({ quotes, onNewQuote, onViewQuote }: Dashboard
           )}
         </div>
       </section>
+
+      {/* Confirmation Modal */}
+      <AnimatePresence>
+        {quoteToDelete && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-[32px] max-w-md w-full p-8 shadow-2xl border border-slate-100 flex flex-col gap-6 relative"
+            >
+              <button 
+                onClick={() => setQuoteToDelete(null)}
+                className="absolute right-6 top-6 p-1 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-colors"
+              >
+                <X size={20} />
+              </button>
+
+              <div className="w-12 h-12 rounded-2xl bg-red-50 flex items-center justify-center text-red-500">
+                <Trash2 size={24} />
+              </div>
+
+              <div className="space-y-2">
+                <h3 className="text-xl font-extrabold text-slate-800 tracking-tight">Confirmar Exclusão</h3>
+                <p className="text-slate-500 text-sm leading-relaxed">
+                  Tem certeza que deseja excluir o orçamento <strong className="text-slate-800 font-bold">{quoteToDelete.numeroSequencial || 'sem número'}</strong>? Esta ação não poderá ser desfeita.
+                </p>
+              </div>
+
+              <div className="flex gap-3 mt-2">
+                <button
+                  onClick={() => setQuoteToDelete(null)}
+                  disabled={isDeleting}
+                  className="flex-1 h-12 rounded-xl border-2 border-slate-100 text-slate-500 font-bold uppercase tracking-widest text-xs hover:bg-slate-50 transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={executeDelete}
+                  disabled={isDeleting}
+                  className="flex-1 h-12 bg-red-500 hover:bg-red-600 text-white rounded-xl font-bold uppercase tracking-widest text-xs flex items-center justify-center gap-2 shadow-lg shadow-red-100 transition-colors"
+                >
+                  {isDeleting ? (
+                    <Loader2 size={16} className="animate-spin" />
+                  ) : (
+                    "Excluir"
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

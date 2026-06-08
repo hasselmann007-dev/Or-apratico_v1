@@ -51,6 +51,47 @@ export default function ProfileSettings({ userId, onBack, onLogout }: ProfileSet
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [phoneDisplay, setPhoneDisplay] = useState('');
+
+  function formatPhone(value: string): string {
+    const digits = value.replace(/\D/g, '').slice(0, 11);
+    if (digits.length === 0) return '';
+    if (digits.length <= 2) return `(${digits}`;
+    if (digits.length <= 6) return `(${digits.slice(0, 2)}) ${digits.slice(2)}`;
+    if (digits.length <= 10) return `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`;
+    return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
+  }
+
+  const handlePhoneKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (
+      [46, 8, 9, 27, 13].indexOf(e.keyCode) !== -1 ||
+      (e.ctrlKey === true && [65, 67, 86, 88].indexOf(e.keyCode) !== -1) ||
+      (e.keyCode >= 35 && e.keyCode <= 40)
+    ) {
+      return;
+    }
+    if ((e.shiftKey || (e.keyCode < 48 || e.keyCode > 57)) && (e.keyCode < 96 || e.keyCode > 105)) {
+      e.preventDefault();
+    }
+  };
+
+  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const rawValue = e.target.value;
+    const digitsOnly = rawValue.replace(/\D/g, '').slice(0, 11);
+    const formatted = formatPhone(digitsOnly);
+    setPhoneDisplay(formatted);
+    setProfile(prev => ({ ...prev, telefone: digitsOnly }));
+  };
+
+  const handlePhonePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    const pastedText = e.clipboardData.getData('text');
+    const digitsOnly = pastedText.replace(/\D/g, '').slice(0, 11);
+    const formatted = formatPhone(digitsOnly);
+    setPhoneDisplay(formatted);
+    setProfile(prev => ({ ...prev, telefone: digitsOnly }));
+  };
+
   useEffect(() => {
     async function fetchProfile() {
       try {
@@ -79,6 +120,7 @@ export default function ProfileSettings({ userId, onBack, onLogout }: ProfileSet
             termos_padrao: data.termos_padrao || '',
             logo_url: data.logo_url || ''
           });
+          setPhoneDisplay(formatPhone(data.telefone || ''));
         }
       } catch (err: any) {
         console.error('Error fetching profile:', err);
@@ -95,6 +137,14 @@ export default function ProfileSettings({ userId, onBack, onLogout }: ProfileSet
     e.preventDefault();
     setErrorMsg(null);
     setSuccessMsg(null);
+    
+    // Strict empty validation
+    const trimmedNome = profile.nome.trim();
+    if (!trimmedNome) {
+      setErrorMsg('O nome profissional é obrigatório.');
+      return;
+    }
+
     setSaving(true);
 
     try {
@@ -102,9 +152,9 @@ export default function ProfileSettings({ userId, onBack, onLogout }: ProfileSet
         .from('perfis_profissionais')
         .upsert({
           id: userId,
-          nome: profile.nome,
-          documento: profile.documento,
-          telefone: profile.telefone,
+          nome: trimmedNome,
+          documento: profile.documento ? profile.documento.trim() : null,
+          telefone: profile.telefone ? profile.telefone.trim() : null,
           termos_padrao: profile.termos_padrao,
           logo_url: profile.logo_url
         });
@@ -124,11 +174,13 @@ export default function ProfileSettings({ userId, onBack, onLogout }: ProfileSet
     const file = e.target.files?.[0];
     if (!file) return;
 
+    // Validate size (max 2MB)
     if (file.size > 2 * 1024 * 1024) {
       setErrorMsg('A imagem deve ter no máximo 2MB.');
       return;
     }
 
+    // Validate type
     if (!file.type.startsWith('image/')) {
       setErrorMsg('O arquivo deve ser uma imagem (PNG, JPG, etc.).');
       return;
@@ -138,22 +190,27 @@ export default function ProfileSettings({ userId, onBack, onLogout }: ProfileSet
     setUploadingLogo(true);
 
     try {
+      // Build safe filename with timestamp
       const fileExt = file.name.split('.').pop();
       const fileName = `logo-${Date.now()}.${fileExt}`;
       const filePath = `${userId}/${fileName}`;
 
+      // Upload to storage
       const { error: uploadError } = await supabase.storage
         .from('logos-usuarios')
         .upload(filePath, file, { upsert: true });
 
       if (uploadError) throw uploadError;
 
+      // Get public URL
       const { data: { publicUrl } } = supabase.storage
         .from('logos-usuarios')
         .getPublicUrl(filePath);
 
+      // Update local state and database
       setProfile(prev => ({ ...prev, logo_url: publicUrl }));
       
+      // Update immediately in database
       const { error: updateError } = await supabase
         .from('perfis_profissionais')
         .update({ logo_url: publicUrl })
@@ -175,6 +232,7 @@ export default function ProfileSettings({ userId, onBack, onLogout }: ProfileSet
     setUploadingLogo(true);
 
     try {
+      // Set logo_url to empty string in state and db
       setProfile(prev => ({ ...prev, logo_url: '' }));
 
       const { error } = await supabase
@@ -209,6 +267,7 @@ export default function ProfileSettings({ userId, onBack, onLogout }: ProfileSet
       exit={{ opacity: 0, y: -15 }}
       className="flex flex-col gap-6 p-6 pb-40 max-w-3xl mx-auto w-full font-sans"
     >
+      {/* Header */}
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-4">
           <button 
@@ -233,6 +292,7 @@ export default function ProfileSettings({ userId, onBack, onLogout }: ProfileSet
       </div>
 
       <div className="bg-white rounded-[32px] border border-slate-100 shadow-2xl shadow-slate-200/50 p-8 flex flex-col gap-8 relative overflow-hidden">
+        {/* Banner Messages */}
         <AnimatePresence mode="wait">
           {errorMsg && (
             <motion.div
@@ -259,6 +319,7 @@ export default function ProfileSettings({ userId, onBack, onLogout }: ProfileSet
           )}
         </AnimatePresence>
 
+        {/* Section: Logotipo */}
         <div className="flex flex-col gap-4">
           <label className="text-[10px] font-bold uppercase text-slate-400 tracking-widest ml-1">Logotipo da Empresa</label>
           <div className="flex flex-col sm:flex-row items-center gap-6 p-6 rounded-2xl bg-slate-50 border border-dashed border-slate-200">
@@ -272,6 +333,7 @@ export default function ProfileSettings({ userId, onBack, onLogout }: ProfileSet
                 <button
                   type="button"
                   onClick={handleRemoveLogo}
+                  disabled={uploadingLogo}
                   className="absolute -top-2 -right-2 p-1.5 bg-red-500 hover:bg-red-600 text-white rounded-full shadow-lg transition-transform active:scale-90"
                 >
                   <Trash2 size={14} />
@@ -314,6 +376,7 @@ export default function ProfileSettings({ userId, onBack, onLogout }: ProfileSet
         </div>
 
         <form onSubmit={handleSave} className="flex flex-col gap-6">
+          {/* Section: Informações do Profissional */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
             <div className="space-y-1.5">
               <label className="text-[10px] font-bold uppercase text-slate-400 tracking-widest ml-1">Nome Profissional / Empresa</label>
@@ -349,10 +412,12 @@ export default function ProfileSettings({ userId, onBack, onLogout }: ProfileSet
               <div className="relative">
                 <Phone className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
                 <input
-                  type="text"
-                  placeholder="Ex: (11) 99999-9999"
-                  value={profile.telefone || ''}
-                  onChange={(e) => setProfile({ ...profile, telefone: e.target.value })}
+                  type="tel"
+                  placeholder="(11) 99999-9999"
+                  value={phoneDisplay}
+                  onKeyDown={handlePhoneKeyDown}
+                  onChange={handlePhoneChange}
+                  onPaste={handlePhonePaste}
                   className="w-full h-12 pl-11 pr-4 rounded-xl bg-slate-50 border border-slate-100 focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all text-sm font-medium"
                 />
               </div>
@@ -372,6 +437,7 @@ export default function ProfileSettings({ userId, onBack, onLogout }: ProfileSet
             </div>
           </div>
 
+          {/* Section: Termos Padrão */}
           <div className="space-y-1.5">
             <label className="text-[10px] font-bold uppercase text-slate-400 tracking-widest ml-1">Termos e Condições Padrão do PDF</label>
             <textarea
@@ -383,6 +449,7 @@ export default function ProfileSettings({ userId, onBack, onLogout }: ProfileSet
             />
           </div>
 
+          {/* Action Button */}
           <button
             type="submit"
             disabled={saving}
