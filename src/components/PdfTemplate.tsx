@@ -1,5 +1,5 @@
 import React, { forwardRef } from 'react';
-import { Quote } from '../types';
+import { Quote, MaterialItem, QuoteItem } from '../types';
 import { 
   User, 
   Phone, 
@@ -11,10 +11,11 @@ import {
   PaintRoller, 
   CreditCard, 
   FileText, 
-  PenTool,
-  ShieldCheck,
-  Mail,
-  Building
+  PenTool, 
+  ShieldCheck, 
+  Mail, 
+  Building,
+  Package
 } from 'lucide-react';
 
 interface PdfTemplateProps {
@@ -22,88 +23,111 @@ interface PdfTemplateProps {
 }
 
 const PdfTemplate = forwardRef<HTMLDivElement, PdfTemplateProps>(({ quote }, ref) => {
-  const subtotal = quote.items.reduce((acc, item) => acc + item.total, 0);
-  const total = subtotal - quote.discount + quote.adjustment;
+  const subtotalServices = (quote.items || []).reduce((acc, item) => acc + (Number(item.total) || 0), 0);
+  const materials = quote.materials || [];
+  const subtotalMaterials = materials.reduce((acc, item) => acc + (Number(item.totalPrice) || 0), 0);
+  const total = subtotalServices + subtotalMaterials - (Number(quote.discount) || 0) + (Number(quote.adjustment) || 0);
 
   const primaryColor = '#01262d'; // Dark navy/teal
   const accentColor = '#06d6a0'; // Bright teal/green
 
-  // Pagination logic:
-  // - Page 1 contains: Header, Customer Info, Cronograma, Table Header, and the first N items (at most 5 items).
-  // - Intermediate pages (if any) contain: Compact Header, Table Header, and additional items (at most 8 items).
-  // - Final page contains: Page Header (Compact Header), Table Header (if items > 0), remaining items (if any, at most 3 items),
-  //   Payment Conditions, Totals block, Terms and Conditions, Acceptance Signatures, and Page Footer.
-  // - If the remaining items count is greater than 3, make the page a regular page (holds up to 8 items) and push the
-  //   payment, totals, terms, and signature blocks to a new blank final page.
+  // Balanced pagination logic ensuring no empty pages
   const getPages = () => {
+    const allServices = quote.items || [];
+    const allMaterials = quote.materials || [];
+    const hasServices = allServices.length > 0;
+    const hasMaterials = allMaterials.length > 0;
+    const totalItemsCount = allServices.length + allMaterials.length;
+
     const pages: Array<{
       pageNumber: number;
       type: 'first' | 'intermediate' | 'final';
-      items: typeof quote.items;
+      services: QuoteItem[];
+      materials: MaterialItem[];
+      showServicesHeader: boolean;
+      showMaterialsHeader: boolean;
       showFinalBlocks: boolean;
     }> = [];
 
-    // Optimize: If budget has 1 or 2 items, everything fits on a single page!
-    if (quote.items.length <= 2) {
+    // Capacity on Page 1 with final blocks:
+    // When both services & materials tables exist, 2 table headers occupy extra vertical space.
+    // Max 4 items fit with both tables, or 5 items with 1 table.
+    const maxSinglePageItems = (hasServices && hasMaterials) ? 4 : 5;
+
+    if (totalItemsCount <= maxSinglePageItems) {
       pages.push({
         pageNumber: 1,
         type: 'first',
-        items: quote.items,
+        services: allServices,
+        materials: allMaterials,
+        showServicesHeader: hasServices,
+        showMaterialsHeader: hasMaterials,
         showFinalBlocks: true,
       });
       return pages;
     }
 
-    // Page 1: Up to 5 items
-    const firstPageItems = quote.items.slice(0, 5);
-    const remainingItemsAfterFirst = quote.items.slice(5);
+    // Multi-page: Page 1 holds initial items without final blocks,
+    // and the final page holds remaining items WITH final blocks.
+    let remServices = [...allServices];
+    let remMaterials = [...allMaterials];
+
+    // Determine how many items to reserve for the final page (1 to 4 items)
+    const itemsForFinalPage = Math.min(4, Math.max(1, totalItemsCount > 8 ? 3 : 2));
+    const itemsForPage1 = totalItemsCount - itemsForFinalPage;
+
+    // Page 1 takes up to 6 items
+    const p1Target = Math.min(itemsForPage1, 6);
+    const p1Services = remServices.slice(0, p1Target);
+    remServices = remServices.slice(p1Target);
+
+    const p1MatSlots = Math.max(0, p1Target - p1Services.length);
+    const p1Materials = remMaterials.slice(0, p1MatSlots);
+    remMaterials = remMaterials.slice(p1MatSlots);
 
     pages.push({
       pageNumber: 1,
       type: 'first',
-      items: firstPageItems,
+      services: p1Services,
+      materials: p1Materials,
+      showServicesHeader: p1Services.length > 0,
+      showMaterialsHeader: p1Materials.length > 0,
       showFinalBlocks: false,
     });
 
-    let currentRemaining = remainingItemsAfterFirst;
-    let currentPageNum = 2;
+    let curPageNum = 2;
 
-    while (true) {
-      if (currentRemaining.length <= 3) {
-        // They fit on the final page!
-        pages.push({
-          pageNumber: currentPageNum,
-          type: 'final',
-          items: currentRemaining,
-          showFinalBlocks: true,
-        });
-        break;
-      } else {
-        // More than 3 items remaining.
-        // We take up to 8 items for an intermediate page.
-        const intermediateItems = currentRemaining.slice(0, 8);
-        currentRemaining = currentRemaining.slice(8);
+    // Intermediate pages if more than 4 items remain
+    while (remServices.length + remMaterials.length > 4) {
+      const curServices = remServices.slice(0, 6);
+      remServices = remServices.slice(6);
 
-        pages.push({
-          pageNumber: currentPageNum,
-          type: 'intermediate',
-          items: intermediateItems,
-          showFinalBlocks: false,
-        });
-        currentPageNum++;
+      const slotsLeft = Math.max(0, 6 - curServices.length);
+      const curMaterials = remMaterials.slice(0, slotsLeft);
+      remMaterials = remMaterials.slice(slotsLeft);
 
-        // If after taking 8 items, we have 0 left, we need to add a blank final page
-        if (currentRemaining.length === 0) {
-          pages.push({
-            pageNumber: currentPageNum,
-            type: 'final',
-            items: [],
-            showFinalBlocks: true,
-          });
-          break;
-        }
-      }
+      pages.push({
+        pageNumber: curPageNum,
+        type: 'intermediate',
+        services: curServices,
+        materials: curMaterials,
+        showServicesHeader: curServices.length > 0,
+        showMaterialsHeader: curMaterials.length > 0,
+        showFinalBlocks: false,
+      });
+      curPageNum++;
     }
+
+    // Final page holds remaining items AND final blocks
+    pages.push({
+      pageNumber: curPageNum,
+      type: 'final',
+      services: remServices,
+      materials: remMaterials,
+      showServicesHeader: remServices.length > 0,
+      showMaterialsHeader: remMaterials.length > 0,
+      showFinalBlocks: true,
+    });
 
     return pages;
   };
@@ -206,12 +230,12 @@ const PdfTemplate = forwardRef<HTMLDivElement, PdfTemplateProps>(({ quote }, ref
     }
   };
 
-  const renderTable = (items: typeof quote.items, isFirstPage: boolean) => {
+  const renderTable = (items: QuoteItem[], showHeader: boolean) => {
     if (items.length === 0) return null;
 
     return (
       <div className="flex flex-col gap-3 mt-1 shrink-0">
-        {isFirstPage && (
+        {showHeader && (
           <>
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 rounded-full flex items-center justify-center text-white shadow-sm" style={{ backgroundColor: accentColor }}>
@@ -269,6 +293,69 @@ const PdfTemplate = forwardRef<HTMLDivElement, PdfTemplateProps>(({ quote }, ref
     );
   };
 
+  const renderMaterialsTable = (materialsList: MaterialItem[], showHeader: boolean) => {
+    if (materialsList.length === 0) return null;
+
+    return (
+      <div className="flex flex-col gap-3 mt-2 shrink-0">
+        {showHeader && (
+          <>
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-full flex items-center justify-center text-white shadow-sm" style={{ backgroundColor: accentColor }}>
+                <Package size={16} />
+              </div>
+              <div className="flex flex-col">
+                <h2 className="font-bold text-[13px] tracking-widest uppercase" style={{ color: primaryColor }}>
+                  Lista de Materiais e Insumos
+                </h2>
+              </div>
+            </div>
+            <p className="text-xs text-slate-500 pl-11 -mt-2">
+               Relação de insumos, marcas recomendadas e quantidades estimadas para a execução da obra.
+            </p>
+          </>
+        )}
+
+        <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
+          <div className="grid grid-cols-[1fr_100px_110px_110px] items-center py-2.5 px-4" style={{ backgroundColor: primaryColor }}>
+            <span className="text-[10px] font-bold text-white uppercase tracking-wider">Descrição do Material</span>
+            <span className="text-[10px] font-bold text-white uppercase tracking-wider text-center">Qtd. / Unid.</span>
+            <span className="text-[10px] font-bold text-white uppercase tracking-wider text-center">Valor Unitário</span>
+            <span className="text-[10px] font-bold text-white uppercase tracking-wider text-center">Valor Total</span>
+          </div>
+          <div className="flex flex-col">
+            {materialsList.map((mat) => (
+              <div key={mat.id} className="grid grid-cols-[1fr_100px_110px_110px] items-center py-2.5 px-4 border-b border-slate-100 last:border-b-0 border-dashed">
+                <div className="flex items-center gap-3 pr-4">
+                  <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 border border-slate-100 bg-slate-50 text-slate-400">
+                     <Package size={13} style={{ color: accentColor }} />
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="font-bold text-xs text-slate-800 leading-tight">{mat.name}</span>
+                    <span className="text-[9px] text-slate-500 mt-0.5 leading-tight">
+                      {mat.notes 
+                        ? `${mat.notes}${mat.sourceStore ? ` (Ref: ${mat.sourceStore})` : ''}` 
+                        : (mat.sourceStore ? `Ref: ${mat.sourceStore}` : 'Material de qualidade')}
+                    </span>
+                  </div>
+                </div>
+                <div className="text-center text-xs text-slate-700 font-bold font-sans">
+                  {mat.quantity} {mat.unit}
+                </div>
+                <div className="text-center text-xs text-slate-600 font-medium font-sans">
+                  R$ {mat.unitPrice.toFixed(2)}
+                </div>
+                <div className="text-center text-xs font-bold text-slate-800 font-sans">
+                  R$ {mat.totalPrice.toFixed(2)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderFinalBlocks = () => {
     return (
       <div className="flex flex-col gap-4 mt-2 shrink-0">
@@ -309,12 +396,18 @@ const PdfTemplate = forwardRef<HTMLDivElement, PdfTemplateProps>(({ quote }, ref
 
           {/* Totais */}
           <div className="w-1/2 flex flex-col justify-end">
-            <div className="border border-slate-200 rounded-xl overflow-hidden flex flex-col h-[115px]">
-              <div className="flex-1 flex flex-col justify-center gap-2 px-4 py-2">
+            <div className="border border-slate-200 rounded-xl overflow-hidden flex flex-col h-[135px]">
+              <div className="flex-1 flex flex-col justify-center gap-1.5 px-4 py-2">
                 <div className="flex justify-between items-center text-xs">
-                  <span className="text-slate-500 font-medium uppercase text-[10px] tracking-wider">Subtotal dos Serviços</span>
-                  <span className="text-slate-800 font-bold">R$ {subtotal.toFixed(2)}</span>
+                  <span className="text-slate-500 font-medium uppercase text-[10px] tracking-wider">Mão de Obra (Serviços)</span>
+                  <span className="text-slate-800 font-bold">R$ {subtotalServices.toFixed(2)}</span>
                 </div>
+                {subtotalMaterials > 0 && (
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="text-slate-500 font-medium uppercase text-[10px] tracking-wider">Insumos e Materiais</span>
+                    <span className="text-slate-800 font-bold">R$ {subtotalMaterials.toFixed(2)}</span>
+                  </div>
+                )}
                 {(quote.adjustment > 0 || quote.discount > 0) && (
                   <div className="flex justify-between items-center text-xs">
                     <span className="text-slate-500 font-medium uppercase text-[10px] tracking-wider">Adicionais / Descontos</span>
@@ -465,7 +558,7 @@ const PdfTemplate = forwardRef<HTMLDivElement, PdfTemplateProps>(({ quote }, ref
                           <div className="w-4.5 h-4.5 rounded-full flex items-center justify-center text-white" style={{ backgroundColor: accentColor }}>
                             <Clock size={11} />
                           </div>
-                           Previsão de Início:
+                          Previsão de Início:
                         </div>
                         <div className="font-bold text-slate-800 text-xs text-right">{quote.customer.startDate || 'A combinar'}</div>
                       </div>
@@ -474,7 +567,7 @@ const PdfTemplate = forwardRef<HTMLDivElement, PdfTemplateProps>(({ quote }, ref
                           <div className="w-4.5 h-4.5 rounded-full flex items-center justify-center text-white" style={{ backgroundColor: accentColor }}>
                             <Flag size={11} />
                           </div>
-                           Prazo de Execução:
+                          Prazo de Execução:
                         </div>
                         <div className="font-bold text-slate-800 text-xs text-right">{quote.executionTerm || 'A combinar'}</div>
                       </div>
@@ -487,7 +580,10 @@ const PdfTemplate = forwardRef<HTMLDivElement, PdfTemplateProps>(({ quote }, ref
               )}
 
               {/* Scope/Table items */}
-              {renderTable(page.items, isFirstPage)}
+              {renderTable(page.services, page.showServicesHeader)}
+
+              {/* Materials Table */}
+              {renderMaterialsTable(page.materials, page.showMaterialsHeader)}
 
               {/* Totals, conditions, acceptance signature, terms (only on the final page) */}
               {page.showFinalBlocks && renderFinalBlocks()}

@@ -10,20 +10,33 @@ import {
   User as UserIcon,
   LogOut,
   Loader2,
-  CheckCircle2
+  CheckCircle2,
+  Package
 } from 'lucide-react';
-import { Quote, QuoteStatus, QuoteItem, CustomerInfo } from './types';
+import { Quote, QuoteStatus, QuoteItem, MaterialItem, CustomerInfo } from './types';
 import { supabase } from './lib/supabase';
 import Dashboard from './components/Dashboard';
 import CustomerForm from './components/CustomerForm';
 import Calculator from './components/Calculator';
+import MaterialsList from './components/MaterialsList';
 import Summary from './components/Summary';
 import Login from './components/Login';
 import ProfileSettings from './components/ProfileSettings';
 import ActionHub from './components/ActionHub';
 import { cn } from './lib/utils';
 
-type Screen = 'dashboard' | 'customer' | 'calculator' | 'summary' | 'profile' | 'hub';
+type Screen = 'dashboard' | 'customer' | 'calculator' | 'materials' | 'summary' | 'profile' | 'hub';
+
+const calculateQuoteTotal = (
+  items: QuoteItem[] = [],
+  materials: MaterialItem[] = [],
+  discount: number = 0,
+  adjustment: number = 0
+): number => {
+  const servicesSubtotal = items.reduce((acc, i) => acc + (Number(i.total) || 0), 0);
+  const materialsSubtotal = materials.reduce((acc, m) => acc + (Number(m.totalPrice) || 0), 0);
+  return servicesSubtotal + materialsSubtotal - (Number(discount) || 0) + (Number(adjustment) || 0);
+};
 
 const EMPTY_CUSTOMER: CustomerInfo = {
   name: '',
@@ -99,27 +112,35 @@ export default function App() {
       if (quotesErr) throw quotesErr;
 
       if (quotesData) {
-        const mappedQuotes: Quote[] = quotesData.map(q => ({
-          id: q.id,
-          numeroSequencial: q.numero_sequencial,
-          date: q.data,
-          customer: q.cliente as CustomerInfo,
-          items: q.itens as QuoteItem[],
-          discount: Number(q.desconto) || 0,
-          adjustment: Number(q.ajuste) || 0,
-          notes: q.observacoes || '',
-          executionTerm: q.execution_term || '',
-          paymentTerms: q.payment_terms || '',
-          professionalName: currentProfile?.nome || 'Profissional',
-          professionalTaxId: currentProfile?.documento || '',
-          professionalPhone: currentProfile?.telefone || '',
-          professionalLogoUrl: currentProfile?.logo_url || undefined,
-          status: q.status as QuoteStatus,
-          totalAmount: Number(q.total_amount) || 0,
-          foiPago: q.foi_pago,
-          formaPagamento: q.forma_pagamento,
-          dataPagamento: q.data_pagamento
-        }));
+        const mappedQuotes: Quote[] = quotesData.map(q => {
+          const rawMaterials: MaterialItem[] = Array.isArray(q.materiais)
+            ? (q.materiais as MaterialItem[])
+            : (Array.isArray((q.cliente as any)?._materials)
+              ? ((q.cliente as any)._materials as MaterialItem[])
+              : []);
+          return {
+            id: q.id,
+            numeroSequencial: q.numero_sequencial,
+            date: q.data,
+            customer: q.cliente as CustomerInfo,
+            items: (q.itens as QuoteItem[]) || [],
+            materials: rawMaterials,
+            discount: Number(q.desconto) || 0,
+            adjustment: Number(q.ajuste) || 0,
+            notes: q.observacoes || '',
+            executionTerm: q.execution_term || '',
+            paymentTerms: q.payment_terms || '',
+            professionalName: currentProfile?.nome || 'Profissional',
+            professionalTaxId: currentProfile?.documento || '',
+            professionalPhone: currentProfile?.telefone || '',
+            professionalLogoUrl: currentProfile?.logo_url || undefined,
+            status: q.status as QuoteStatus,
+            totalAmount: Number(q.total_amount) || 0,
+            foiPago: q.foi_pago,
+            formaPagamento: q.forma_pagamento,
+            dataPagamento: q.data_pagamento
+          };
+        });
         setQuotes(mappedQuotes);
       }
     } catch (e) {
@@ -136,37 +157,64 @@ export default function App() {
   const saveQuoteToSupabase = async (quote: Quote) => {
     if (!user) return;
     try {
-      const { data, error } = await supabase
+      const primaryPayload: any = {
+        id: quote.id,
+        user_id: user.id,
+        data: quote.date,
+        cliente: quote.customer,
+        itens: quote.items,
+        materiais: quote.materials || [],
+        desconto: quote.discount,
+        ajuste: quote.adjustment,
+        observacoes: quote.notes,
+        status: quote.status,
+        execution_term: quote.executionTerm,
+        payment_terms: quote.paymentTerms,
+        total_amount: quote.totalAmount,
+        foi_pago: quote.foiPago,
+        forma_pagamento: quote.formaPagamento,
+        data_pagamento: quote.dataPagamento
+      };
+
+      let { data, error } = await supabase
         .from('orcamentos')
-        .upsert({
-          id: quote.id,
-          user_id: user.id,
-          data: quote.date,
-          cliente: quote.customer,
-          itens: quote.items,
-          desconto: quote.discount,
-          ajuste: quote.adjustment,
-          observacoes: quote.notes,
-          status: quote.status,
-          execution_term: quote.executionTerm,
-          payment_terms: quote.paymentTerms,
-          total_amount: quote.totalAmount,
-          foi_pago: quote.foiPago,
-          forma_pagamento: quote.formaPagamento,
-          data_pagamento: quote.dataPagamento
-        })
+        .upsert(primaryPayload)
         .select()
         .single();
+
+      // Fallback if 'materiais' column is not created in remote Supabase table schema
+      if (error && (error.message?.includes('materiais') || error.code === '42703' || error.code === 'PGRST204')) {
+        const fallbackPayload = { ...primaryPayload };
+        delete fallbackPayload.materiais;
+        fallbackPayload.cliente = {
+          ...quote.customer,
+          _materials: quote.materials || []
+        };
+        const fallbackRes = await supabase
+          .from('orcamentos')
+          .upsert(fallbackPayload)
+          .select()
+          .single();
+        data = fallbackRes.data;
+        error = fallbackRes.error;
+      }
 
       if (error) throw error;
 
       if (data) {
+        const rawMaterials: MaterialItem[] = Array.isArray(data.materiais)
+          ? (data.materiais as MaterialItem[])
+          : (Array.isArray((data.cliente as any)?._materials)
+            ? ((data.cliente as any)._materials as MaterialItem[])
+            : (quote.materials || []));
+
         const mapped: Quote = {
           id: data.id,
           numeroSequencial: data.numero_sequencial,
           date: data.data,
           customer: data.cliente as CustomerInfo,
-          items: data.itens as QuoteItem[],
+          items: (data.itens as QuoteItem[]) || [],
+          materials: rawMaterials,
           discount: Number(data.desconto) || 0,
           adjustment: Number(data.ajuste) || 0,
           notes: data.observacoes || '',
@@ -207,6 +255,7 @@ export default function App() {
       date: new Date().toLocaleDateString('pt-BR'),
       customer: { ...EMPTY_CUSTOMER },
       items: [],
+      materials: [],
       discount: 0,
       adjustment: 0,
       notes: profile?.termos_padrao || '',
@@ -225,14 +274,26 @@ export default function App() {
   };
 
   const handleUpdateQuote = (updated: Quote) => {
-    setCurrentQuote(updated);
-    saveQuoteToSupabase(updated);
+    const recalculatedTotal = calculateQuoteTotal(
+      updated.items,
+      updated.materials,
+      updated.discount,
+      updated.adjustment
+    );
+    const syncedQuote = { ...updated, totalAmount: recalculatedTotal };
+    setCurrentQuote(syncedQuote);
+    saveQuoteToSupabase(syncedQuote);
   };
 
   const finalizeQuote = async () => {
     if (!currentQuote) return;
     
-    const totalAmount = currentQuote.items.reduce((acc, i) => acc + i.total, 0) - currentQuote.discount + currentQuote.adjustment;
+    const totalAmount = calculateQuoteTotal(
+      currentQuote.items,
+      currentQuote.materials,
+      currentQuote.discount,
+      currentQuote.adjustment
+    );
     const finalized = { 
       ...currentQuote, 
       status: QuoteStatus.SENT,
@@ -297,7 +358,12 @@ export default function App() {
               const updatedQuote = {
                 ...currentQuote,
                 items: updatedItems,
-                totalAmount: updatedItems.reduce((acc, i) => acc + i.total, 0) - currentQuote.discount + currentQuote.adjustment
+                totalAmount: calculateQuoteTotal(
+                  updatedItems,
+                  currentQuote.materials,
+                  currentQuote.discount,
+                  currentQuote.adjustment
+                )
               };
               setCurrentQuote(updatedQuote);
               saveQuoteToSupabase(updatedQuote);
@@ -307,7 +373,12 @@ export default function App() {
               const updatedQuote = {
                 ...currentQuote,
                 items: updatedItems,
-                totalAmount: updatedItems.reduce((acc, i) => acc + i.total, 0) - currentQuote.discount + currentQuote.adjustment
+                totalAmount: calculateQuoteTotal(
+                  updatedItems,
+                  currentQuote.materials,
+                  currentQuote.discount,
+                  currentQuote.adjustment
+                )
               };
               setCurrentQuote(updatedQuote);
               saveQuoteToSupabase(updatedQuote);
@@ -317,7 +388,40 @@ export default function App() {
               const updatedQuote = {
                 ...currentQuote,
                 items: updatedItems,
-                totalAmount: updatedItems.reduce((acc, i) => acc + i.total, 0) - currentQuote.discount + currentQuote.adjustment
+                totalAmount: calculateQuoteTotal(
+                  updatedItems,
+                  currentQuote.materials,
+                  currentQuote.discount,
+                  currentQuote.adjustment
+                )
+              };
+              setCurrentQuote(updatedQuote);
+              saveQuoteToSupabase(updatedQuote);
+            }}
+            onNext={() => {
+              saveQuoteToSupabase(currentQuote);
+              setCurrentScreen('materials');
+            }}
+            onBack={() => {
+              saveQuoteToSupabase(currentQuote);
+              setCurrentScreen('customer');
+            }}
+          />
+        );
+      case 'materials':
+        return currentQuote && (
+          <MaterialsList 
+            quote={currentQuote}
+            onUpdateMaterials={(updatedMaterials) => {
+              const updatedQuote = {
+                ...currentQuote,
+                materials: updatedMaterials,
+                totalAmount: calculateQuoteTotal(
+                  currentQuote.items,
+                  updatedMaterials,
+                  currentQuote.discount,
+                  currentQuote.adjustment
+                )
               };
               setCurrentQuote(updatedQuote);
               saveQuoteToSupabase(updatedQuote);
@@ -328,7 +432,7 @@ export default function App() {
             }}
             onBack={() => {
               saveQuoteToSupabase(currentQuote);
-              setCurrentScreen('customer');
+              setCurrentScreen('calculator');
             }}
           />
         );
@@ -340,14 +444,34 @@ export default function App() {
             onFinalize={finalizeQuote}
             onBack={() => {
               saveQuoteToSupabase(currentQuote);
-              setCurrentScreen('calculator');
+              setCurrentScreen('materials');
             }}
             onRemoveItem={(id) => {
               const updatedItems = currentQuote.items.filter(i => i.id !== id);
               const updatedQuote = {
                 ...currentQuote,
                 items: updatedItems,
-                totalAmount: updatedItems.reduce((acc, i) => acc + i.total, 0) - currentQuote.discount + currentQuote.adjustment
+                totalAmount: calculateQuoteTotal(
+                  updatedItems,
+                  currentQuote.materials,
+                  currentQuote.discount,
+                  currentQuote.adjustment
+                )
+              };
+              setCurrentQuote(updatedQuote);
+              saveQuoteToSupabase(updatedQuote);
+            }}
+            onRemoveMaterial={(matId) => {
+              const updatedMaterials = (currentQuote.materials || []).filter(m => m.id !== matId);
+              const updatedQuote = {
+                ...currentQuote,
+                materials: updatedMaterials,
+                totalAmount: calculateQuoteTotal(
+                  currentQuote.items,
+                  updatedMaterials,
+                  currentQuote.discount,
+                  currentQuote.adjustment
+                )
               };
               setCurrentQuote(updatedQuote);
               saveQuoteToSupabase(updatedQuote);
@@ -468,9 +592,16 @@ export default function App() {
           />
           <NavBtn 
             icon={<CalcIcon size={22} />} 
-            label="Calcular" 
+            label="Serviços" 
             active={currentScreen === 'calculator'} 
             onClick={() => currentQuote && setCurrentScreen('calculator')} 
+            disabled={!currentQuote}
+          />
+          <NavBtn 
+            icon={<Package size={22} />} 
+            label="Materiais" 
+            active={currentScreen === 'materials'} 
+            onClick={() => currentQuote && setCurrentScreen('materials')} 
             disabled={!currentQuote}
           />
           <NavBtn 

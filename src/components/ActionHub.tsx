@@ -14,7 +14,8 @@ import {
   MessageSquare, 
   Mail, 
   Loader2,
-  Check
+  Check,
+  Package
 } from 'lucide-react';
 import { Quote, QuoteStatus } from '../types';
 import { cn } from '../lib/utils';
@@ -50,8 +51,11 @@ export default function ActionHub({ quote, onUpdateQuote, onEdit, onBack, showTo
     setDataPagamento(quote.dataPagamento || new Date().toISOString().split('T')[0]);
   }, [quote]);
 
-  const subtotal = quote.items.reduce((acc, item) => acc + item.total, 0);
-  const total = subtotal - quote.discount + quote.adjustment;
+  const subtotalServices = (quote.items || []).reduce((acc, item) => acc + (Number(item.total) || 0), 0);
+  const materials = quote.materials || [];
+  const subtotalMaterials = materials.reduce((acc, item) => acc + (Number(item.totalPrice) || 0), 0);
+  const subtotal = subtotalServices + subtotalMaterials;
+  const total = subtotal - (Number(quote.discount) || 0) + (Number(quote.adjustment) || 0);
 
   const handleGeneratePDF = async () => {
     if (!pdfRef.current) return;
@@ -101,7 +105,10 @@ export default function ActionHub({ quote, onUpdateQuote, onEdit, onBack, showTo
     const cleanPhone = quote.customer.phone.replace(/\D/g, '');
     const phoneWithCountry = cleanPhone.startsWith('55') ? cleanPhone : `55${cleanPhone}`;
     
-    const message = `Olá, ${quote.customer.name}! Segue o orçamento referente ao serviço solicitado.\n\n📄 *Orçamento Nº:* ${docNumber}\n💰 *Valor Total:* ${formattedTotal}\n📅 *Data:* ${quote.date}\n\nEntre em contato caso tenha alguma dúvida ou para aprovar o serviço. Obrigado!`;
+    const matDetails = materials.length > 0 
+      ? `\n🧱 *Materiais e Insumos:* ${materials.length} itens (${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(subtotalMaterials)})\n🔧 *Mão de Obra:* ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(subtotalServices)}`
+      : '';
+    const message = `Olá, ${quote.customer.name}! Segue o orçamento referente ao serviço solicitado.\n\n📄 *Orçamento Nº:* ${docNumber}${matDetails}\n💰 *Valor Total:* ${formattedTotal}\n📅 *Data:* ${quote.date}\n\nEntre em contato caso tenha alguma dúvida ou para aprovar o serviço. Obrigado!`;
     const url = `https://wa.me/${phoneWithCountry}?text=${encodeURIComponent(message)}`;
     window.open(url, '_blank');
     setShowShareMenu(false);
@@ -263,9 +270,21 @@ export default function ActionHub({ quote, onUpdateQuote, onEdit, onBack, showTo
 
             <div className="border-t border-slate-100 pt-4 flex flex-col gap-2 bg-slate-50/50 -mx-6 -mb-6 p-6 rounded-b-[28px]">
               <div className="flex justify-between items-center text-xs font-bold text-slate-400 uppercase tracking-wider">
-                <span>Subtotal</span>
-                <span>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(subtotal)}</span>
+                <span>Mão de Obra</span>
+                <span>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(subtotalServices)}</span>
               </div>
+              {subtotalMaterials > 0 && (
+                <div className="flex justify-between items-center text-xs font-bold text-blue-600 uppercase tracking-wider">
+                  <span>Materiais ({materials.length})</span>
+                  <span>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(subtotalMaterials)}</span>
+                </div>
+              )}
+              {subtotalMaterials > 0 && (
+                <div className="flex justify-between items-center text-xs font-bold text-slate-400 uppercase tracking-wider">
+                  <span>Subtotal Geral</span>
+                  <span>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(subtotal)}</span>
+                </div>
+              )}
               {quote.discount > 0 && (
                 <div className="flex justify-between items-center text-xs font-bold text-red-500 uppercase tracking-wider">
                   <span>Desconto</span>
@@ -273,7 +292,7 @@ export default function ActionHub({ quote, onUpdateQuote, onEdit, onBack, showTo
                 </div>
               )}
               {quote.adjustment > 0 && (
-                <div className="flex justify-between items-center text-xs font-bold text-emerald-600 uppercase tracking-wider">
+                <div className="flex justify-between items-center text-emerald-600 uppercase tracking-wider">
                   <span>Acréscimo</span>
                   <span>+{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(quote.adjustment)}</span>
                 </div>
@@ -286,6 +305,38 @@ export default function ActionHub({ quote, onUpdateQuote, onEdit, onBack, showTo
               </div>
             </div>
           </div>
+
+          {/* Card: Materials Summary if present */}
+          {materials.length > 0 && (
+            <div className="bg-white rounded-[28px] border border-slate-100 shadow-xl shadow-slate-100 p-6 flex flex-col gap-4">
+              <div className="flex justify-between items-center">
+                <h4 className="text-[10px] font-bold uppercase text-slate-400 tracking-widest flex items-center gap-1.5">
+                  <Package size={14} className="text-primary" />
+                  Lista de Materiais e Insumos ({materials.length})
+                </h4>
+                <span className="text-xs font-bold text-slate-700">
+                  Subtotal: {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(subtotalMaterials)}
+                </span>
+              </div>
+
+              <div className="divide-y divide-slate-50 max-h-[220px] overflow-y-auto pr-1">
+                {materials.map((mat) => (
+                  <div key={mat.id} className="py-3 flex justify-between items-center gap-4 first:pt-0 last:pb-0">
+                    <div className="flex flex-col min-w-0">
+                      <span className="font-extrabold text-slate-700 text-sm truncate">{mat.name}</span>
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mt-0.5">
+                        {mat.quantity} {mat.unit} × {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(mat.unitPrice)}
+                        {mat.sourceStore ? ` • Ref: ${mat.sourceStore}` : ''}
+                      </span>
+                    </div>
+                    <span className="font-bold text-slate-800 text-sm whitespace-nowrap">
+                      {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(mat.totalPrice)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Right column: Action Toolbar & Status Ledger */}
