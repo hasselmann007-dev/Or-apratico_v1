@@ -34,12 +34,26 @@ export interface CustomerInfo {
   startDate: string;
 }
 
+export interface MaterialItem {
+  id: string;
+  name: string;
+  category?: string;
+  quantity: number;
+  unit: string;
+  unitPrice: number;
+  totalPrice: number;
+  notes?: string;
+  sourceStore?: string;
+  sourceUrl?: string;
+}
+
 export interface Quote {
   id: string;
   numeroSequencial?: string;
   date: string;
   customer: CustomerInfo;
   items: QuoteItem[];
+  materials?: MaterialItem[];
   discount: number;
   adjustment: number;
   notes: string;
@@ -51,4 +65,7 @@ export interface Quote {
   professionalLogoUrl?: string;
   status: QuoteStatus;
   totalAmount: number;
+  foiPago?: boolean;
+  formaPagamento?: string;
+  dataPagamento?: string;
 }
