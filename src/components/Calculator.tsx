@@ -168,7 +168,9 @@ export default function Calculator({ items, onAddItem, onRemoveItem, onUpdateIte
                       )}
                     >
                       <span className="block text-[10px] font-bold uppercase mb-1">{c.name.split(' ')[0]}</span>
-                      <span className="text-sm font-bold tracking-tight">R$ {c.basePrice}/m²</span>
+                      <span className="text-sm font-bold tracking-tight">
+                        {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(c.basePrice)}/m²
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -368,7 +370,7 @@ export default function Calculator({ items, onAddItem, onRemoveItem, onUpdateIte
             disabled={items.length === 0}
             className="pointer-events-auto h-20 px-10 bg-slate-900 text-white rounded-[32px] font-black uppercase tracking-widest flex items-center justify-center gap-3 shadow-2xl shadow-slate-300 active:scale-95 disabled:opacity-0 transition-all text-sm"
           >
-            Concluir Orçamento
+            Avançar (Materiais)
             <ArrowRightIcon size={24} />
           </button>
         </div>
@@ -382,12 +384,13 @@ function ArrowRightIcon({ size }: { size: number }) {
 }
 
 interface EditableItemProps {
+  key?: React.Key;
   item: QuoteItem;
   onUpdateItem: (item: QuoteItem) => void;
   onRemoveItem: (id: string) => void;
 }
 
-function EditableItem({ item, onUpdateItem, onRemoveItem }: EditableItemProps & { key?: string }) {
+function EditableItem({ item, onUpdateItem, onRemoveItem }: EditableItemProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [localDescription, setLocalDescription] = useState(item.description);
   
@@ -630,7 +633,7 @@ function EditableItem({ item, onUpdateItem, onRemoveItem }: EditableItemProps & 
         <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">
           {item.type === 'fixed' 
             ? `Valor Fixo ${item.fixedTerm ? `• Prazo: ${item.fixedTerm}` : ''}`
-            : `${(item.area || 0).toFixed(2)}m² • R$${(item.unitPrice || 0).toFixed(2)}/m²`
+            : `${(item.area || 0).toFixed(2)}m² • ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(item.unitPrice || 0)}/m²`
           }
         </p>
       </div>
@@ -644,7 +647,7 @@ function EditableItem({ item, onUpdateItem, onRemoveItem }: EditableItemProps & 
             item.type === 'fixed' ? 'text-emerald-600 hover:text-emerald-500' : 'text-slate-900 hover:text-primary'
           )}
         >
-          R${item.total.toFixed(2)}
+          {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(item.total)}
         </span>
         <button 
           onClick={() => onRemoveItem(item.id)}

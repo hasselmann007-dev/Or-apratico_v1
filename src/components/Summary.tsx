@@ -6,9 +6,10 @@ import {
   FileText, 
   Minus, 
   Plus,
-  AlertCircle
+  AlertCircle,
+  Package
 } from 'lucide-react';
-import { Quote, QuoteStatus } from '../types';
+import { Quote, QuoteStatus, MaterialItem } from '../types';
 import { cn } from '../lib/utils';
 import jsPDF from 'jspdf';
 import { toPng } from 'html-to-image';
@@ -20,11 +21,15 @@ interface SummaryProps {
   onFinalize: () => void;
   onBack: () => void;
   onRemoveItem: (id: string) => void;
+  onRemoveMaterial?: (id: string) => void;
 }
 
-export default function Summary({ quote, onUpdateQuote, onFinalize, onBack, onRemoveItem }: SummaryProps) {
-  const subtotal = quote.items.reduce((acc, item) => acc + item.total, 0);
-  const total = subtotal - quote.discount + quote.adjustment;
+export default function Summary({ quote, onUpdateQuote, onFinalize, onBack, onRemoveItem, onRemoveMaterial }: SummaryProps) {
+  const subtotalServices = (quote.items || []).reduce((acc, item) => acc + (Number(item.total) || 0), 0);
+  const materials = quote.materials || [];
+  const subtotalMaterials = materials.reduce((acc, item) => acc + (Number(item.totalPrice) || 0), 0);
+  const subtotal = subtotalServices + subtotalMaterials;
+  const total = subtotal - (Number(quote.discount) || 0) + (Number(quote.adjustment) || 0);
 
   const pdfRef = useRef<HTMLDivElement>(null);
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
@@ -138,6 +143,68 @@ export default function Summary({ quote, onUpdateQuote, onFinalize, onBack, onRe
           ))}
         </div>
       </section>
+
+      {/* Materials List */}
+      {materials.length > 0 && (
+        <section className="flex flex-col gap-4">
+          <div className="flex items-center justify-between ml-2">
+            <h3 className="text-[10px] font-bold uppercase text-slate-400 tracking-widest flex items-center gap-1.5">
+              <Package size={14} className="text-primary" />
+              Materiais Adicionados ({materials.length})
+            </h3>
+            <span className="text-xs font-black text-slate-700">
+              Subtotal: {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(subtotalMaterials)}
+            </span>
+          </div>
+
+          <div className="flex flex-col gap-3">
+            {materials.map((mat) => (
+              <div 
+                key={mat.id}
+                className="bg-white border border-slate-100 rounded-2xl p-5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 shadow-lg shadow-slate-50"
+              >
+                <div className="flex flex-col">
+                  <span className="font-extrabold text-slate-800">{mat.name}</span>
+                  <div className="flex items-center gap-2 text-slate-400 text-[10px] font-bold uppercase tracking-widest mt-1">
+                    <span className="text-primary font-bold">{mat.quantity} {mat.unit}</span>
+                    <div className="w-1 h-1 rounded-full bg-slate-200" />
+                    <span>R$ {mat.unitPrice.toFixed(2)} / {mat.unit}</span>
+                    {mat.sourceStore && (
+                      <>
+                        <div className="w-1 h-1 rounded-full bg-slate-200" />
+                        <span>Ref: {mat.sourceStore}</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center justify-between w-full sm:w-auto gap-4">
+                  <span className="text-xl font-black text-slate-900 tracking-tight">
+                    {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(mat.totalPrice)}
+                  </span>
+                  <button 
+                    onClick={() => {
+                      if (onRemoveMaterial) {
+                        onRemoveMaterial(mat.id);
+                      } else {
+                        const updated = materials.filter(m => m.id !== mat.id);
+                        onUpdateQuote({
+                          ...quote,
+                          materials: updated,
+                          totalAmount: subtotalServices + updated.reduce((acc, m) => acc + (m.totalPrice || 0), 0) - quote.discount + quote.adjustment
+                        });
+                      }
+                    }}
+                    className="p-2.5 text-slate-300 hover:text-error hover:bg-error-container rounded-xl transition-all"
+                    title="Remover material"
+                  >
+                    <Trash2 size={18} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Adjustments, Professional Info & Notes */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
@@ -256,10 +323,24 @@ export default function Summary({ quote, onUpdateQuote, onFinalize, onBack, onRe
           <section className="bg-slate-900 border border-slate-800 rounded-[40px] p-10 shadow-2xl shadow-slate-300 flex flex-col gap-6 text-white relative overflow-hidden">
              <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full blur-3xl -mr-16 -mt-16" />
              
-             <div className="flex justify-between items-center opacity-60 text-xs font-bold uppercase tracking-widest">
-               <span>Subtotal Bruto</span>
-               <span>R$ {subtotal.toFixed(2)}</span>
+             <div className="flex justify-between items-center opacity-70 text-xs font-bold uppercase tracking-widest">
+               <span>Mão de Obra (Serviços)</span>
+               <span>R$ {subtotalServices.toFixed(2)}</span>
              </div>
+
+             {subtotalMaterials > 0 && (
+               <div className="flex justify-between items-center text-blue-300 text-xs font-bold uppercase tracking-widest">
+                 <span>Insumos e Materiais</span>
+                 <span>R$ {subtotalMaterials.toFixed(2)}</span>
+               </div>
+             )}
+
+             {subtotalMaterials > 0 && (
+               <div className="flex justify-between items-center opacity-50 text-[10px] font-bold uppercase tracking-widest pt-1 border-t border-white/10">
+                 <span>Subtotal Geral</span>
+                 <span>R$ {subtotal.toFixed(2)}</span>
+               </div>
+             )}
              
              {quote.discount > 0 && (
                <div className="flex justify-between items-center text-red-400 text-xs font-bold uppercase tracking-widest">
