@@ -95,6 +95,47 @@ function extractJsonArray<T>(text: string): T[] {
 }
 
 /**
+ * Extracts a single JSON object from model output safely, handling code fences and bracketed text.
+ */
+function extractJsonObject<T>(text: string): T | null {
+  if (!text || typeof text !== 'string') return null;
+
+  const cleanText = (str: string) => str.trim().replace(/,\s*([}\]])/g, '$1');
+
+  // 1. Markdown code block
+  try {
+    const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+    if (codeBlockMatch && codeBlockMatch[1]) {
+      const cleanBlock = cleanText(codeBlockMatch[1]);
+      const parsed = JSON.parse(cleanBlock);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed[0] as T;
+      if (parsed && typeof parsed === 'object') return parsed as T;
+    }
+  } catch {}
+
+  // 2. Direct JSON parse
+  try {
+    const trimmed = cleanText(text);
+    const parsed = JSON.parse(trimmed);
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed[0] as T;
+    if (parsed && typeof parsed === 'object') return parsed as T;
+  } catch {}
+
+  // 3. Find outermost brace { ... }
+  try {
+    const startIdx = text.indexOf('{');
+    const endIdx = text.lastIndexOf('}');
+    if (startIdx !== -1 && endIdx > startIdx) {
+      const slice = cleanText(text.substring(startIdx, endIdx + 1));
+      const parsed = JSON.parse(slice);
+      if (parsed && typeof parsed === 'object') return parsed as T;
+    }
+  } catch {}
+
+  return null;
+}
+
+/**
  * Executes generateContent with multi-tier model fallbacks and tool degradation.
  */
 async function generateWithFallback(
@@ -206,6 +247,180 @@ IMPORTANTE: Responda APENAS com um array JSON válido, sem texto conversacional 
       sourceUrl: item.sourceUrl || groundingUri || undefined,
     };
   });
+}
+
+/**
+ * Heuristically parses a product link/URL to extract title, store, and estimated data when AI fails or is offline.
+ */
+function fallbackFromProductUrl(url: string): AISearchProduct {
+  let hostname = '';
+  let pathname = '';
+  try {
+    const parsed = new URL(url.startsWith('http://') || url.startsWith('https://') ? url : `https://${url}`);
+    hostname = parsed.hostname.toLowerCase();
+    pathname = parsed.pathname;
+  } catch {
+    pathname = url;
+  }
+
+  // Detect Store Name
+  let store = 'Loja Online';
+  if (hostname.includes('mercadolivre') || hostname.includes('mercadolibre')) store = 'Mercado Livre';
+  else if (hostname.includes('leroymerlin')) store = 'Leroy Merlin';
+  else if (hostname.includes('obramax')) store = 'Obramax';
+  else if (hostname.includes('telhanorte')) store = 'Telhanorte';
+  else if (hostname.includes('cec.com.br')) store = 'C&C Casa e Construção';
+  else if (hostname.includes('amazon')) store = 'Amazon Brasil';
+  else if (hostname.includes('shopee')) store = 'Shopee';
+  else if (hostname.includes('magazineluiza') || hostname.includes('magalu')) store = 'Magazine Luiza';
+  else if (hostname.includes('madeiramadeira')) store = 'MadeiraMadeira';
+  else if (hostname.includes('lojadomecanico')) store = 'Loja do Mecânico';
+  else if (hostname) store = hostname.replace(/^www\./, '');
+
+  // Extract slug tokens from path
+  const segments = pathname.split('/').filter(Boolean);
+  const slug = segments.reduce((longest, seg) => (seg.length > longest.length && !seg.startsWith('MLB') && !seg.startsWith('dp') ? seg : longest), '') || pathname;
+  
+  // Format slug to readable title
+  let name = '';
+  try {
+    name = decodeURIComponent(slug);
+  } catch {
+    name = slug;
+  }
+  name = name
+    .replace(/[-_+]/g, ' ')
+    .replace(/\.(html?|php|aspx?)$/i, '')
+    .replace(/\b(p|dp|produto|item|mlb\d+|ref\d+)\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (name.length > 2) {
+    name = name.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+  } else {
+    name = 'Produto de ' + store;
+  }
+
+  // Detect category, unit and default estimated price
+  const lower = name.toLowerCase();
+  let category = 'Geral';
+  let unit = 'un';
+  let estimatedPrice = 50.0;
+
+  if (lower.includes('tinta') || lower.includes('selador') || lower.includes('verniz') || lower.includes('massa corrida')) {
+    category = 'Pintura';
+    unit = lower.includes('18l') ? 'lata' : lower.includes('3,6l') || lower.includes('3.6l') ? 'galão' : 'un';
+    estimatedPrice = unit === 'lata' ? 320.0 : 85.0;
+  } else if (lower.includes('argamassa') || lower.includes('cimento') || lower.includes('rejunte')) {
+    category = lower.includes('rejunte') ? 'Piso' : 'Alvenaria';
+    unit = lower.includes('saco') || lower.includes('20kg') || lower.includes('50kg') ? 'saco' : 'un';
+    estimatedPrice = lower.includes('cimento') ? 37.0 : 42.0;
+  } else if (lower.includes('porcelanato') || lower.includes('piso') || lower.includes('revestimento')) {
+    category = 'Piso';
+    unit = 'm²';
+    estimatedPrice = 89.0;
+  } else if (lower.includes('fio') || lower.includes('cabo') || lower.includes('disjuntor') || lower.includes('tomada')) {
+    category = 'Elétrica';
+    unit = lower.includes('rolo') || lower.includes('100m') ? 'rolo' : 'un';
+    estimatedPrice = unit === 'rolo' ? 180.0 : 25.0;
+  } else if (lower.includes('tubo') || lower.includes('cano') || lower.includes('conexao') || lower.includes('registro')) {
+    category = 'Hidráulica';
+    unit = lower.includes('barra') || lower.includes('6m') ? 'barra' : 'un';
+    estimatedPrice = 32.0;
+  } else if (lower.includes('drywall') || lower.includes('placa') || lower.includes('perfil')) {
+    category = 'Drywall';
+    unit = lower.includes('perfil') ? 'barra' : 'un';
+    estimatedPrice = 45.0;
+  }
+
+  return {
+    name,
+    category,
+    quantity: 1,
+    unit,
+    estimatedUnitPrice: estimatedPrice,
+    storeOrSource: store,
+    description: `Produto identificado a partir do link da loja ${store}`,
+    sourceUrl: url,
+  };
+}
+
+/**
+ * Analyzes a product URL using Google Gen AI with Search grounding to identify product title,
+ * price, quantity, unit, and store source.
+ */
+export async function analyzeProductLinkWithAI(url: string): Promise<AISearchProduct> {
+  const cleanUrl = url.trim();
+  if (!cleanUrl) {
+    throw new Error('URL do produto não informada');
+  }
+
+  const apiKey = getGeminiApiKey();
+  if (!apiKey) {
+    return fallbackFromProductUrl(cleanUrl);
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
+
+  const prompt = `Você é um assistente orçamentista sênior de compras de materiais e obras no Brasil.
+O usuário quer adicionar um material ao orçamento e colou o seguinte link de produto:
+"${cleanUrl}"
+
+Utilize a Pesquisa Google (Google Search Grounding) para inspecionar este produto, o anúncio e o marketplace/loja correspondente.
+Sua missão é identificar:
+1. "name": O nome oficial e completo do produto com marca e especificação técnica (Ex: "Tinta Acrílica Fosca Suvinil Rende Muito 18L Branca Neve" ou "Argamassa Colante AC-III Branca Quartzolit 20kg").
+2. "category": Uma categoria dentre: "Pintura", "Alvenaria", "Piso", "Hidráulica", "Elétrica", "Drywall", "Ferramentas", "Geral".
+3. "quantity": A quantidade do item indicada na embalagem/anúncio (padrão 1).
+4. "unit": A unidade de medida mais adequada: "lata", "galão", "saco", "un", "m²", "m", "barra", "kg", "cx", "rolo" ou "pct".
+5. "estimatedUnitPrice": O preço atual de venda do produto em Reais (R$) praticado no link/loja (número decimal, ex: 389.90). Se não conseguir identificar o valor exato no anúncio, informe o preço médio real praticado para este produto no mercado brasileiro.
+6. "storeOrSource": O nome da loja ou marketplace (Ex: "Mercado Livre", "Leroy Merlin", "Obramax", "Telhanorte", "Amazon", "Magazine Luiza", etc.).
+7. "description": Breve descrição técnica, rendimento ou uso do material (máximo 150 caracteres).
+8. "sourceUrl": "${cleanUrl}"
+
+IMPORTANTE: Responda APENAS com um objeto JSON válido, sem texto conversacional antes ou depois:
+{
+  "name": "Nome e marca do produto",
+  "category": "Pintura",
+  "quantity": 1,
+  "unit": "lata",
+  "estimatedUnitPrice": 389.90,
+  "storeOrSource": "Mercado Livre",
+  "description": "Rendimento até 150m² acabados",
+  "sourceUrl": "${cleanUrl}"
+}`;
+
+  let responseText = '';
+  let groundingChunks: any[] = [];
+
+  try {
+    const result = await generateWithFallback(ai, prompt, true);
+    responseText = result.text;
+    if (result.groundingChunks && Array.isArray(result.groundingChunks)) {
+      groundingChunks = result.groundingChunks;
+    }
+  } catch (err) {
+    console.warn('Gemini link analysis failed, falling back to heuristic parsing:', err);
+    return fallbackFromProductUrl(cleanUrl);
+  }
+
+  const parsed = extractJsonObject<any>(responseText);
+  if (!parsed || !parsed.name) {
+    return fallbackFromProductUrl(cleanUrl);
+  }
+
+  const groundingChunk = groundingChunks?.[0];
+  const detectedStore = parsed.storeOrSource || groundingChunk?.web?.title;
+
+  return {
+    name: String(parsed.name).trim(),
+    category: String(parsed.category || 'Geral').trim(),
+    quantity: Math.max(0.01, Number(parsed.quantity) || 1),
+    unit: String(parsed.unit || 'un').trim(),
+    estimatedUnitPrice: Math.max(0, Number(parsed.estimatedUnitPrice) || 0),
+    storeOrSource: detectedStore ? String(detectedStore).trim() : 'Loja Online',
+    description: parsed.description ? String(parsed.description).trim() : undefined,
+    sourceUrl: cleanUrl,
+  };
 }
 
 /**
