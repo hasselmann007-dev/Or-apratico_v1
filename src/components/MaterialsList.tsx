@@ -4,7 +4,7 @@ import {
   ArrowLeft, 
   ArrowRight, 
   Sparkles, 
-  Search, 
+  Link2, 
   Plus, 
   Trash2, 
   Package, 
@@ -15,14 +15,16 @@ import {
   AlertCircle, 
   PlusCircle, 
   MinusCircle, 
-  ChevronDown,
-  ChevronUp,
   ExternalLink,
   Edit2,
-  X
+  X,
+  HelpCircle,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { Quote, MaterialItem } from '../types';
-import { searchProductsWithAI, suggestMaterialsForServices, AISearchProduct } from '../lib/gemini';
+import { analyzeProductLinkWithAI, AISearchProduct } from '../lib/gemini';
 import { cn } from '../lib/utils';
 
 interface MaterialsListProps {
@@ -46,34 +48,35 @@ const COMMON_UNITS = [
   { id: 'pct', label: 'Pacote (pct)' },
 ];
 
-const QUICK_SEARCH_CHIPS = [
-  'Tinta Acrílica 18L',
-  'Massa Corrida 18L',
-  'Argamassa AC-III 20kg',
-  'Porcelanato 80x80',
-  'Cimento Votoran 50kg',
-  'Placa Drywall 120x180',
-  'Rolo de Pintura 23cm',
-  'Tubo PVC 25mm Tigre',
-  'Cabo Flexível 2.5mm Sil',
+const CATEGORIES = [
+  'Pintura',
+  'Alvenaria',
+  'Piso',
+  'Hidráulica',
+  'Elétrica',
+  'Drywall',
+  'Ferramentas',
+  'Geral',
 ];
 
 export default function MaterialsList({ quote, onUpdateMaterials, onNext, onBack }: MaterialsListProps) {
   const materials = quote.materials || [];
 
-  // Search State
-  const [searchQuery, setSearchQuery] = useState('');
-  const [isSearching, setIsSearching] = useState(false);
-  const [searchResults, setSearchResults] = useState<AISearchProduct[]>([]);
-  const [hasSearched, setHasSearched] = useState(false);
-  const [addedSearchIdxs, setAddedSearchIdxs] = useState<Record<number, boolean>>({});
+  // Link Analysis State
+  const [linkUrl, setLinkUrl] = useState('');
+  const [isAnalyzingLink, setIsAnalyzingLink] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const [detectedProduct, setDetectedProduct] = useState<AISearchProduct | null>(null);
 
-  // Auto-Suggest State
-  const [isSuggesting, setIsSuggesting] = useState(false);
-  const [suggestError, setSuggestError] = useState<string | null>(null);
+  // Editable fields for the detected product prompt
+  const [confirmName, setConfirmName] = useState('');
+  const [confirmQty, setConfirmQty] = useState('1');
+  const [confirmUnit, setConfirmUnit] = useState('un');
+  const [confirmPrice, setConfirmPrice] = useState('0');
+  const [confirmSuccessMsg, setConfirmSuccessMsg] = useState<string | null>(null);
 
   // Manual Add Form State
-  const [showManualForm, setShowManualForm] = useState(false);
+  const [showManualForm, setShowManualForm] = useState(true);
   const [manualName, setManualName] = useState('');
   const [manualCategory, setManualCategory] = useState('Geral');
   const [manualQuantity, setManualQuantity] = useState('1');
@@ -92,112 +95,80 @@ export default function MaterialsList({ quote, onUpdateMaterials, onNext, onBack
   // Total Materials Cost
   const totalMaterialsAmount = materials.reduce((acc, m) => acc + (Number(m.totalPrice) || 0), 0);
 
-  // Parse Brazilian numeric string (handles both comma and dot)
+  // Parse Brazilian numeric string (handles comma and dot)
   const parseBrNumber = (val: string): number => {
     if (!val) return 0;
     const sanitized = val.toString().replace(/\s/g, '').replace(',', '.');
     return parseFloat(sanitized) || 0;
   };
 
-  // Handle AI Web Search
-  const handleSearch = async (queryToSearch?: string) => {
-    const q = (queryToSearch || searchQuery).trim();
-    if (!q) return;
-
-    if (queryToSearch) {
-      setSearchQuery(queryToSearch);
-    }
-
-    setIsSearching(true);
-    setHasSearched(true);
-    setSuggestError(null);
-    setAddedSearchIdxs({});
-
-    try {
-      const results = await searchProductsWithAI(q);
-      setSearchResults(results);
-    } catch (err: any) {
-      console.error('Search error:', err);
-      setSuggestError('Não foi possível completar a pesquisa na web no momento. Tente novamente ou use a adição manual.');
-    } finally {
-      setIsSearching(false);
-    }
+  // Format currency
+  const formatBRL = (val: number) => {
+    return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
   };
 
-  // Handle Suggest based on quote services
-  const handleSuggestFromServices = async () => {
-    if (!quote.items || quote.items.length === 0) {
-      setSuggestError('Adicione pelo menos um serviço no passo anterior para que a IA possa analisar e sugerir os materiais da obra.');
+  // Handle Analyzing Product Link with AI
+  const handleAnalyzeLink = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const url = linkUrl.trim();
+    if (!url) {
+      setLinkError('Por favor, cole o link (URL) do produto antes de analisar.');
       return;
     }
 
-    setIsSuggesting(true);
-    setSuggestError(null);
-    setSearchResults([]);
-    setAddedSearchIdxs({});
+    setIsAnalyzingLink(true);
+    setLinkError(null);
+    setDetectedProduct(null);
+    setConfirmSuccessMsg(null);
 
     try {
-      const suggestions = await suggestMaterialsForServices(quote.items);
-      setSearchResults(suggestions);
-      setHasSearched(true);
+      const product = await analyzeProductLinkWithAI(url);
+      setDetectedProduct(product);
+      setConfirmName(product.name);
+      setConfirmQty(String(product.quantity || 1));
+      setConfirmUnit(product.unit || 'un');
+      setConfirmPrice(String(product.estimatedUnitPrice || 0));
     } catch (err: any) {
-      console.error('Suggest error:', err);
-      setSuggestError('Ocorreu um erro ao calcular os materiais sugeridos. Tente novamente.');
+      console.error('Error analyzing link:', err);
+      setLinkError('Não foi possível identificar o produto automaticamente através do link. Verifique se o endereço é válido ou adicione-o manualmente.');
     } finally {
-      setIsSuggesting(false);
+      setIsAnalyzingLink(false);
     }
   };
 
-  // Add Item from Search/Suggestions
-  const handleAddSearchResult = (product: AISearchProduct, idx: number) => {
-    const qty = Math.max(0.01, product.quantity || 1);
-    const unitPrice = Math.max(0, product.estimatedUnitPrice || 0);
+  // Confirm and Add Detected Product to Materials List
+  const handleConfirmAddDetected = () => {
+    if (!detectedProduct) return;
+
+    const qty = Math.max(0.01, parseBrNumber(confirmQty) || 1);
+    const unitPrice = Math.max(0, parseBrNumber(confirmPrice));
 
     const newItem: MaterialItem = {
       id: crypto.randomUUID(),
-      name: product.name,
-      category: product.category,
+      name: confirmName.trim() || detectedProduct.name,
+      category: detectedProduct.category || 'Geral',
       quantity: qty,
-      unit: product.unit || 'un',
+      unit: confirmUnit || detectedProduct.unit || 'un',
       unitPrice,
       totalPrice: Number((qty * unitPrice).toFixed(2)),
-      notes: product.description,
-      sourceStore: product.storeOrSource,
-      sourceUrl: product.sourceUrl,
+      notes: detectedProduct.description,
+      sourceStore: detectedProduct.storeOrSource,
+      sourceUrl: detectedProduct.sourceUrl,
     };
 
     onUpdateMaterials([...materials, newItem]);
-    setAddedSearchIdxs(prev => ({ ...prev, [idx]: true }));
+
+    // Success feedback and reset
+    setConfirmSuccessMsg(`"${newItem.name}" foi adicionado com sucesso à sua lista!`);
+    setDetectedProduct(null);
+    setLinkUrl('');
+    setTimeout(() => setConfirmSuccessMsg(null), 5000);
   };
 
-  // Add All Search Results (ignoring duplicates)
-  const handleAddAllSearchResults = () => {
-    const unaddedProducts = searchResults.filter((_, idx) => !addedSearchIdxs[idx]);
-    if (unaddedProducts.length === 0) return;
-
-    const newItems: MaterialItem[] = unaddedProducts.map((product) => {
-      const qty = Math.max(0.01, product.quantity || 1);
-      const unitPrice = Math.max(0, product.estimatedUnitPrice || 0);
-      return {
-        id: crypto.randomUUID(),
-        name: product.name,
-        category: product.category,
-        quantity: qty,
-        unit: product.unit || 'un',
-        unitPrice,
-        totalPrice: Number((qty * unitPrice).toFixed(2)),
-        notes: product.description,
-        sourceStore: product.storeOrSource,
-        sourceUrl: product.sourceUrl,
-      };
-    });
-
-    onUpdateMaterials([...materials, ...newItems]);
-    const allAdded: Record<number, boolean> = {};
-    searchResults.forEach((_, idx) => {
-      allAdded[idx] = true;
-    });
-    setAddedSearchIdxs(allAdded);
+  // Discard Detected Product
+  const handleDiscardDetected = () => {
+    setDetectedProduct(null);
+    setLinkError(null);
   };
 
   // Manual Add Form Submit
@@ -226,7 +197,6 @@ export default function MaterialsList({ quote, onUpdateMaterials, onNext, onBack
     setManualQuantity('1');
     setManualPrice('');
     setManualNotes('');
-    setShowManualForm(false);
   };
 
   // Start Editing an Item
@@ -273,7 +243,7 @@ export default function MaterialsList({ quote, onUpdateMaterials, onNext, onBack
     onUpdateMaterials(materials.filter(m => m.id !== id));
   };
 
-  // Update Item Quantity with step
+  // Update Item Quantity with step (+/-)
   const handleUpdateQuantity = (id: string, delta: number) => {
     const updated = materials.map(item => {
       if (item.id === id) {
@@ -313,7 +283,7 @@ export default function MaterialsList({ quote, onUpdateMaterials, onNext, onBack
                   Etapa 3 de 4
                 </span>
                 <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                  Orçamento Inteligente
+                  Orçamento de Obras
                 </span>
               </div>
               <h2 className="text-2xl font-extrabold text-slate-800 tracking-tight flex items-center gap-2 mt-0.5">
@@ -327,278 +297,244 @@ export default function MaterialsList({ quote, onUpdateMaterials, onNext, onBack
           <div className="hidden sm:flex flex-col items-end bg-white border border-slate-100 px-4 py-2 rounded-2xl shadow-sm">
             <span className="text-[10px] font-bold uppercase text-slate-400 tracking-widest">Total Materiais</span>
             <span className="text-base font-black text-slate-800">
-              {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(totalMaterialsAmount)}
+              {formatBRL(totalMaterialsAmount)}
             </span>
           </div>
         </div>
 
         <p className="text-slate-500 text-sm font-medium">
-          Pesquise produtos e preços médios do mercado brasileiro na web com IA do Google, gere estimativas automáticas a partir dos serviços ou cadastre itens manualmente.
+          Adicione materiais colando o link do produto para a IA identificar nome, preço e quantidade, ou cadastre os insumos manualmente.
         </p>
       </div>
 
-      {/* AI Hub Actions */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Card 1: Web Search with AI */}
-        <div className="bg-gradient-to-br from-blue-50/80 via-white to-indigo-50/50 border border-blue-100 rounded-3xl p-6 shadow-sm flex flex-col justify-between gap-4 relative overflow-hidden">
-          <div className="flex items-start justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="w-10 h-10 rounded-2xl bg-blue-600 text-white flex items-center justify-center shadow-md shadow-blue-200">
-                <Search size={20} />
-              </div>
-              <div>
-                <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
-                  Pesquisar na Web com IA
-                  <span className="bg-blue-100 text-blue-700 text-[9px] font-extrabold uppercase px-2 py-0.5 rounded-full">
-                    Google AI
-                  </span>
-                </h3>
-                <p className="text-[11px] text-slate-500">
-                  Preços reais e referências do mercado brasileiro
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Search Form */}
-          <div className="flex flex-col gap-2">
-            <div className="relative">
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-                placeholder="Ex: Tinta Suvinil 18L, Argamassa AC3, Porcelanato..."
-                className="w-full h-12 pl-4 pr-11 rounded-2xl bg-white border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-xs font-medium text-slate-700 placeholder:text-slate-400 transition-all shadow-inner"
-              />
-              <button
-                type="button"
-                onClick={() => handleSearch()}
-                disabled={isSearching || !searchQuery.trim()}
-                className="absolute right-1.5 top-1.5 bottom-1.5 px-3 rounded-xl bg-blue-600 text-white font-bold text-xs flex items-center justify-center hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm"
-                title="Pesquisar Preços"
-              >
-                {isSearching ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
-              </button>
-            </div>
-
-            {/* Quick Chips */}
-            <div className="flex items-center gap-1.5 flex-wrap pt-1">
-              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Sugestões:</span>
-              {QUICK_SEARCH_CHIPS.slice(0, 4).map((chip, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => handleSearch(chip)}
-                  disabled={isSearching}
-                  className="text-[10px] font-semibold text-blue-700 bg-white hover:bg-blue-100/70 border border-blue-200/60 px-2.5 py-1 rounded-lg transition-all"
-                >
-                  {chip}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Card 2: Suggest from Quote Services */}
-        <div className="bg-gradient-to-br from-emerald-50/80 via-white to-teal-50/50 border border-emerald-100 rounded-3xl p-6 shadow-sm flex flex-col justify-between gap-4 relative overflow-hidden">
-          <div className="flex items-start justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-md shadow-emerald-200">
-                <Sparkles size={20} />
-              </div>
-              <div>
-                <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
-                  Calcular com Base na Obra
-                  <span className="bg-emerald-100 text-emerald-700 text-[9px] font-extrabold uppercase px-2 py-0.5 rounded-full">
-                    Automático
-                  </span>
-                </h3>
-                <p className="text-[11px] text-slate-500">
-                  Calcula quantidades e rendimentos por m² e serviços
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <p className="text-xs text-slate-600 font-medium">
-              {quote.items.length > 0 ? (
-                <>
-                  Identificamos <strong className="text-slate-800">{quote.items.length} {quote.items.length === 1 ? 'serviço' : 'serviços'}</strong> no orçamento. A IA calculará todos os insumos necessários para a execução técnica.
-                </>
-              ) : (
-                'Nenhum serviço adicionado ainda. Adicione serviços no passo anterior para cálculo automático de materiais.'
-              )}
-            </p>
-
-            <button
-              type="button"
-              onClick={handleSuggestFromServices}
-              disabled={isSuggesting || quote.items.length === 0}
-              className="w-full h-12 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              {isSuggesting ? (
-                <>
-                  <Loader2 size={16} className="animate-spin" />
-                  <span>Analisando serviços da obra...</span>
-                </>
-              ) : (
-                <>
-                  <Sparkles size={16} />
-                  <span>Sugerir Materiais dos Serviços ({quote.items.length})</span>
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Suggest Error Message */}
-      {suggestError && (
-        <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-start gap-3">
-          <AlertCircle size={18} className="shrink-0 mt-0.5 text-amber-600" />
-          <div className="flex-1 font-medium leading-relaxed">{suggestError}</div>
-        </div>
-      )}
-
-      {/* AI Search / Suggestion Results Panel */}
+      {/* Success Notification */}
       <AnimatePresence>
-        {hasSearched && (
-          <motion.section
-            initial={{ opacity: 0, y: 15 }}
+        {confirmSuccessMsg && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -15 }}
-            className="bg-white border border-slate-200 rounded-3xl p-6 shadow-lg shadow-slate-100 flex flex-col gap-4"
+            exit={{ opacity: 0, y: -10 }}
+            className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center gap-3 shadow-sm"
           >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center">
-                  <Store size={18} />
-                </div>
-                <div>
-                  <h3 className="font-extrabold text-slate-800 text-sm">
-                    Resultados e Sugestões da IA ({searchResults.length})
-                  </h3>
-                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
-                    Pesquisa de mercado na web e cálculos de rendimento técnico
-                  </span>
-                </div>
-              </div>
-
-              {searchResults.length > 1 && (
-                <button
-                  type="button"
-                  onClick={handleAddAllSearchResults}
-                  className="px-3.5 py-1.5 rounded-xl bg-blue-50 text-blue-700 hover:bg-blue-100 font-bold text-xs flex items-center gap-1.5 transition-colors"
-                >
-                  <Plus size={14} />
-                  Adicionar Todos ({searchResults.length})
-                </button>
-              )}
-            </div>
-
-            {searchResults.length === 0 ? (
-              <div className="py-8 text-center text-slate-400 text-xs">
-                Nenhum produto correspondente encontrado. Tente refinar os termos ou adicionar manualmente abaixo.
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 pt-1">
-                {searchResults.map((product, idx) => {
-                  const isAdded = !!addedSearchIdxs[idx];
-                  return (
-                    <div
-                      key={idx}
-                      className={cn(
-                        "p-4 rounded-2xl border transition-all flex flex-col justify-between gap-3",
-                        isAdded 
-                          ? "bg-emerald-50/50 border-emerald-200" 
-                          : "bg-slate-50/70 hover:bg-white border-slate-100 hover:border-slate-300 hover:shadow-md"
-                      )}
-                    >
-                      <div className="flex flex-col gap-1.5">
-                        <div className="flex items-start justify-between gap-2">
-                          <span className="font-bold text-xs text-slate-800 leading-snug">
-                            {product.name}
-                          </span>
-                          <span className="text-[10px] font-bold text-slate-500 bg-white border border-slate-200 px-2 py-0.5 rounded-full shrink-0">
-                            {product.category}
-                          </span>
-                        </div>
-
-                        {product.description && (
-                          <p className="text-[11px] text-slate-500 leading-relaxed">
-                            {product.description}
-                          </p>
-                        )}
-
-                        <div className="flex items-center gap-3 text-[10px] text-slate-400 font-medium flex-wrap pt-0.5">
-                          {product.storeOrSource && (
-                            <div className="flex items-center gap-1">
-                              <Store size={11} />
-                              <span>Referência: {product.storeOrSource}</span>
-                            </div>
-                          )}
-                          {product.sourceUrl && (
-                            <a
-                              href={product.sourceUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-blue-600 hover:text-blue-800 flex items-center gap-1 underline underline-offset-2"
-                            >
-                              <ExternalLink size={11} />
-                              Ver link
-                            </a>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-between pt-2 border-t border-slate-200/50">
-                        <div className="flex flex-col">
-                          <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
-                            Preço Médio ({product.quantity} {product.unit})
-                          </span>
-                          <span className="text-base font-black text-slate-900">
-                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(
-                              product.quantity * product.estimatedUnitPrice
-                            )}
-                          </span>
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => handleAddSearchResult(product, idx)}
-                          disabled={isAdded}
-                          className={cn(
-                            "px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm",
-                            isAdded
-                              ? "bg-emerald-600 text-white cursor-default"
-                              : "bg-primary hover:bg-primary-dark text-white hover:scale-102"
-                          )}
-                        >
-                          {isAdded ? (
-                            <>
-                              <Check size={14} />
-                              Adicionado
-                            </>
-                          ) : (
-                            <>
-                              <Plus size={14} />
-                              Adicionar
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </motion.section>
+            <CheckCircle2 size={18} className="text-emerald-600 shrink-0" />
+            <span>{confirmSuccessMsg}</span>
+          </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Manual Add Toggle Button & Form */}
+      {/* SECTION 1: ADD VIA PRODUCT LINK (AI-POWERED) */}
+      <section className="bg-gradient-to-br from-blue-50/70 via-white to-indigo-50/40 border border-blue-100 rounded-3xl p-6 shadow-sm flex flex-col gap-4">
+        <div className="flex items-start justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-blue-600 text-white flex items-center justify-center shadow-md shadow-blue-200">
+              <Link2 size={20} />
+            </div>
+            <div>
+              <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+                Adicionar por Link de Produto
+                <span className="bg-blue-100 text-blue-700 text-[9px] font-extrabold uppercase px-2 py-0.5 rounded-full flex items-center gap-1">
+                  <Sparkles size={10} /> Google AI
+                </span>
+              </h3>
+              <p className="text-[11px] text-slate-500">
+                Cole o link de qualquer loja (Mercado Livre, Leroy Merlin, Obramax, Amazon, etc.) para a IA identificar o produto
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Link Input Form */}
+        <form onSubmit={handleAnalyzeLink} className="flex flex-col sm:flex-row gap-2.5">
+          <div className="relative flex-1">
+            <input
+              type="url"
+              value={linkUrl}
+              onChange={(e) => {
+                setLinkUrl(e.target.value);
+                if (linkError) setLinkError(null);
+              }}
+              placeholder="Cole aqui o link do produto (ex: https://www.mercadolivre.com.br/...)"
+              className="w-full h-12 pl-4 pr-10 rounded-2xl bg-white border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-xs font-medium text-slate-800 placeholder:text-slate-400 transition-all shadow-inner"
+            />
+            {linkUrl && (
+              <button
+                type="button"
+                onClick={() => setLinkUrl('')}
+                className="absolute right-3 top-3 text-slate-400 hover:text-slate-600 p-1"
+                title="Limpar campo"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+
+          <button
+            type="submit"
+            disabled={isAnalyzingLink || !linkUrl.trim()}
+            className="h-12 px-6 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+          >
+            {isAnalyzingLink ? (
+              <>
+                <Loader2 size={16} className="animate-spin" />
+                <span>Identificando com IA...</span>
+              </>
+            ) : (
+              <>
+                <Sparkles size={16} />
+                <span>Analisar Link</span>
+              </>
+            )}
+          </button>
+        </form>
+
+        {/* Link Analysis Error */}
+        {linkError && (
+          <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-start gap-2.5">
+            <AlertCircle size={16} className="shrink-0 mt-0.5 text-amber-600" />
+            <div className="flex-1 font-medium">{linkError}</div>
+          </div>
+        )}
+
+        {/* CONFIRMATION PROMPT: Solicitando se é pra adicionar na lista ou não */}
+        <AnimatePresence>
+          {detectedProduct && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.98, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.98, y: 10 }}
+              className="mt-2 p-5 rounded-2xl bg-white border-2 border-blue-400 shadow-xl flex flex-col gap-4 relative overflow-hidden"
+            >
+              {/* Prompt Header */}
+              <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-3">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center">
+                    <Sparkles size={18} />
+                  </div>
+                  <div>
+                    <h4 className="font-extrabold text-slate-800 text-sm">
+                      Produto Identificado pela IA
+                    </h4>
+                    <p className="text-[11px] font-semibold text-blue-700">
+                      Deseja adicionar este produto à lista de materiais?
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {detectedProduct.storeOrSource && (
+                    <span className="text-[10px] font-bold text-slate-600 bg-slate-100 px-2.5 py-1 rounded-full flex items-center gap-1">
+                      <Store size={11} /> {detectedProduct.storeOrSource}
+                    </span>
+                  )}
+                  {detectedProduct.sourceUrl && (
+                    <a
+                      href={detectedProduct.sourceUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-slate-400 hover:text-blue-600 p-1 transition-colors"
+                      title="Ver anúncio original"
+                    >
+                      <ExternalLink size={14} />
+                    </a>
+                  )}
+                </div>
+              </div>
+
+              {/* Detected Product Editable Details */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="md:col-span-2 space-y-1">
+                  <label className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">
+                    Produto Identificado
+                  </label>
+                  <input
+                    type="text"
+                    value={confirmName}
+                    onChange={(e) => setConfirmName(e.target.value)}
+                    className="w-full h-11 px-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-bold text-slate-800 focus:bg-white focus:border-blue-500 outline-none transition-all"
+                  />
+                  {detectedProduct.description && (
+                    <p className="text-[11px] text-slate-500 italic mt-1">
+                      {detectedProduct.description}
+                    </p>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">
+                      Qtd. & Unidade
+                    </label>
+                    <div className="flex gap-1">
+                      <input
+                        type="text"
+                        value={confirmQty}
+                        onChange={(e) => setConfirmQty(e.target.value)}
+                        className="w-16 h-11 px-2 text-center rounded-xl bg-slate-50 border border-slate-200 text-xs font-bold text-slate-800 focus:bg-white focus:border-blue-500 outline-none"
+                      />
+                      <select
+                        value={confirmUnit}
+                        onChange={(e) => setConfirmUnit(e.target.value)}
+                        className="flex-1 h-11 px-1 rounded-xl bg-slate-50 border border-slate-200 text-[11px] font-semibold text-slate-700 outline-none"
+                      >
+                        {COMMON_UNITS.map(u => (
+                          <option key={u.id} value={u.id}>{u.id}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">
+                      Valor Unit. (R$)
+                    </label>
+                    <input
+                      type="text"
+                      value={confirmPrice}
+                      onChange={(e) => setConfirmPrice(e.target.value)}
+                      className="w-full h-11 px-3 rounded-xl bg-slate-50 border border-slate-200 text-xs font-bold text-slate-800 focus:bg-white focus:border-blue-500 outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Subtotal Calculation & Decision Buttons */}
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-slate-100">
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-slate-400 font-semibold uppercase text-[10px] tracking-wider">
+                    Total deste item:
+                  </span>
+                  <span className="text-base font-black text-slate-900">
+                    {formatBRL((parseBrNumber(confirmQty) || 0) * (parseBrNumber(confirmPrice) || 0))}
+                  </span>
+                </div>
+
+                {/* The Two Decision Actions */}
+                <div className="flex items-center gap-2.5 w-full sm:w-auto">
+                  <button
+                    type="button"
+                    onClick={handleDiscardDetected}
+                    className="flex-1 sm:flex-initial h-11 px-4 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-600 hover:text-slate-800 font-bold text-xs flex items-center justify-center gap-1.5 transition-all"
+                  >
+                    <X size={15} />
+                    Descartar
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleConfirmAddDetected}
+                    className="flex-1 sm:flex-initial h-11 px-6 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center justify-center gap-2 shadow-md shadow-emerald-600/20 transition-all"
+                  >
+                    <Check size={16} />
+                    Adicionar à Lista
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </section>
+
+      {/* SECTION 2: MANUAL ADD FORM */}
       <section className="bg-white border border-slate-100 rounded-3xl p-6 shadow-sm flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5">
@@ -610,7 +546,7 @@ export default function MaterialsList({ quote, onUpdateMaterials, onNext, onBack
                 Adicionar Material Manualmente
               </h3>
               <p className="text-[11px] text-slate-400">
-                Insira itens e valores personalizados diretamente
+                Insira itens, especificações e valores personalizados diretamente
               </p>
             </div>
           </div>
@@ -632,7 +568,7 @@ export default function MaterialsList({ quote, onUpdateMaterials, onNext, onBack
           </button>
         </div>
 
-        {/* Form Body */}
+        {/* Manual Form Body */}
         <AnimatePresence>
           {showManualForm && (
             <motion.form
@@ -642,8 +578,8 @@ export default function MaterialsList({ quote, onUpdateMaterials, onNext, onBack
               onSubmit={handleManualAdd}
               className="flex flex-col gap-4 pt-4 border-t border-slate-100"
             >
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="md:col-span-2 space-y-1.5">
                   <label className="text-[10px] font-bold uppercase text-slate-400 tracking-widest ml-1">
                     Descrição do Material / Insumo *
                   </label>
@@ -652,46 +588,61 @@ export default function MaterialsList({ quote, onUpdateMaterials, onNext, onBack
                     required
                     value={manualName}
                     onChange={(e) => setManualName(e.target.value)}
-                    placeholder="Ex: Rolo de Lã de Carneiro 23cm Antigota"
+                    placeholder="Ex: Tinta Acrílica Fosca Suvinil 18L, Cimento CP II 50kg, etc."
                     className="w-full h-12 px-4 rounded-2xl bg-slate-50 border border-slate-200 focus:ring-2 focus:ring-primary focus:bg-white outline-none text-xs font-medium text-slate-800 transition-all"
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-bold uppercase text-slate-400 tracking-widest ml-1">
-                      Quantidade *
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={manualQuantity}
-                      onChange={(e) => setManualQuantity(e.target.value)}
-                      placeholder="Ex: 1 ou 2,5"
-                      className="w-full h-12 px-4 rounded-2xl bg-slate-50 border border-slate-200 focus:ring-2 focus:ring-primary focus:bg-white outline-none text-xs font-bold text-slate-800 transition-all"
-                    />
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-bold uppercase text-slate-400 tracking-widest ml-1">
-                      Unidade de Medida
-                    </label>
-                    <select
-                      value={manualUnit}
-                      onChange={(e) => setManualUnit(e.target.value)}
-                      className="w-full h-12 px-3 rounded-2xl bg-slate-50 border border-slate-200 focus:ring-2 focus:ring-primary focus:bg-white outline-none text-xs font-medium text-slate-800 transition-all"
-                    >
-                      {COMMON_UNITS.map((u) => (
-                        <option key={u.id} value={u.id}>
-                          {u.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold uppercase text-slate-400 tracking-widest ml-1">
+                    Categoria
+                  </label>
+                  <select
+                    value={manualCategory}
+                    onChange={(e) => setManualCategory(e.target.value)}
+                    className="w-full h-12 px-3 rounded-2xl bg-slate-50 border border-slate-200 focus:ring-2 focus:ring-primary focus:bg-white outline-none text-xs font-medium text-slate-800 transition-all"
+                  >
+                    {CATEGORIES.map((cat) => (
+                      <option key={cat} value={cat}>
+                        {cat}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold uppercase text-slate-400 tracking-widest ml-1">
+                    Quantidade *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={manualQuantity}
+                    onChange={(e) => setManualQuantity(e.target.value)}
+                    placeholder="Ex: 1 ou 2,5"
+                    className="w-full h-12 px-4 rounded-2xl bg-slate-50 border border-slate-200 focus:ring-2 focus:ring-primary focus:bg-white outline-none text-xs font-bold text-slate-800 transition-all"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold uppercase text-slate-400 tracking-widest ml-1">
+                    Unidade de Medida
+                  </label>
+                  <select
+                    value={manualUnit}
+                    onChange={(e) => setManualUnit(e.target.value)}
+                    className="w-full h-12 px-3 rounded-2xl bg-slate-50 border border-slate-200 focus:ring-2 focus:ring-primary focus:bg-white outline-none text-xs font-medium text-slate-800 transition-all"
+                  >
+                    {COMMON_UNITS.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-bold uppercase text-slate-400 tracking-widest ml-1">
                     Preço Unitário (R$) *
@@ -701,23 +652,23 @@ export default function MaterialsList({ quote, onUpdateMaterials, onNext, onBack
                     required
                     value={manualPrice}
                     onChange={(e) => setManualPrice(e.target.value)}
-                    placeholder="Ex: 38,90 ou 38.90"
+                    placeholder="Ex: 189,90"
                     className="w-full h-12 px-4 rounded-2xl bg-slate-50 border border-slate-200 focus:ring-2 focus:ring-primary focus:bg-white outline-none text-xs font-bold text-slate-800 transition-all"
                   />
                 </div>
+              </div>
 
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold uppercase text-slate-400 tracking-widest ml-1">
-                    Observações / Marca (Opcional)
-                  </label>
-                  <input
-                    type="text"
-                    value={manualNotes}
-                    onChange={(e) => setManualNotes(e.target.value)}
-                    placeholder="Ex: Tigre ou Atlas, cabo reforçado"
-                    className="w-full h-12 px-4 rounded-2xl bg-slate-50 border border-slate-200 focus:ring-2 focus:ring-primary focus:bg-white outline-none text-xs font-medium text-slate-800 transition-all"
-                  />
-                </div>
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-bold uppercase text-slate-400 tracking-widest ml-1">
+                  Observações / Marca / Loja de Referência (Opcional)
+                </label>
+                <input
+                  type="text"
+                  value={manualNotes}
+                  onChange={(e) => setManualNotes(e.target.value)}
+                  placeholder="Ex: Leroy Merlin, Coral Rende Muito, cabo reforçado, etc."
+                  className="w-full h-12 px-4 rounded-2xl bg-slate-50 border border-slate-200 focus:ring-2 focus:ring-primary focus:bg-white outline-none text-xs font-medium text-slate-800 transition-all"
+                />
               </div>
 
               {/* Preview & Submit */}
@@ -725,9 +676,7 @@ export default function MaterialsList({ quote, onUpdateMaterials, onNext, onBack
                 <div className="text-xs text-slate-500 font-medium">
                   Total deste item:{' '}
                   <strong className="text-slate-800 font-bold">
-                    {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(
-                      (parseBrNumber(manualQuantity) || 0) * (parseBrNumber(manualPrice) || 0)
-                    )}
+                    {formatBRL((parseBrNumber(manualQuantity) || 0) * (parseBrNumber(manualPrice) || 0))}
                   </strong>
                 </div>
 
@@ -744,7 +693,7 @@ export default function MaterialsList({ quote, onUpdateMaterials, onNext, onBack
         </AnimatePresence>
       </section>
 
-      {/* Materials List (Items in Quote) */}
+      {/* SECTION 3: MATERIALS LIST (ITEMS IN QUOTE) */}
       <section className="flex flex-col gap-4">
         <div className="flex items-center justify-between ml-2">
           <h3 className="text-[11px] font-bold uppercase text-slate-400 tracking-widest flex items-center gap-2">
@@ -771,7 +720,7 @@ export default function MaterialsList({ quote, onUpdateMaterials, onNext, onBack
             <div className="flex flex-col gap-1 max-w-sm">
               <h4 className="font-bold text-slate-700 text-sm">Nenhum material adicionado ainda</h4>
               <p className="text-xs text-slate-400">
-                Você pode pesquisar produtos na web acima, sugerir a partir dos serviços ou avançar diretamente caso os materiais fiquem 100% por conta do cliente.
+                Cole o link de um produto acima ou use o formulário manual. Se os materiais forem fornecidos pelo cliente, você pode simplesmente avançar para a próxima etapa.
               </p>
             </div>
           </div>
@@ -864,9 +813,7 @@ export default function MaterialsList({ quote, onUpdateMaterials, onNext, onBack
                         <div className="text-xs text-slate-600">
                           Total atualizado:{' '}
                           <strong className="text-slate-900 font-bold">
-                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(
-                              (parseBrNumber(editQuantity) || 0) * (parseBrNumber(editUnitPrice) || 0)
-                            )}
+                            {formatBRL((parseBrNumber(editQuantity) || 0) * (parseBrNumber(editUnitPrice) || 0))}
                           </strong>
                         </div>
 
@@ -963,7 +910,7 @@ export default function MaterialsList({ quote, onUpdateMaterials, onNext, onBack
                             R$ {item.unitPrice.toFixed(2)} / {item.unit}
                           </span>
                           <span className="text-lg font-black text-slate-900 tracking-tight">
-                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(item.totalPrice)}
+                            {formatBRL(item.totalPrice)}
                           </span>
                         </div>
 
@@ -1011,7 +958,7 @@ export default function MaterialsList({ quote, onUpdateMaterials, onNext, onBack
 
               <div className="text-right">
                 <span className="text-2xl font-black tracking-tight text-white">
-                  {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(totalMaterialsAmount)}
+                  {formatBRL(totalMaterialsAmount)}
                 </span>
               </div>
             </div>
